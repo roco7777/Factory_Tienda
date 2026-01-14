@@ -90,7 +90,7 @@ class _TiendaScreenState extends State<TiendaScreen> {
       // 2. Cargamos inventario
       final response = await http.get(
         Uri.parse(
-          '${widget.baseUrl}/api/inventario?q=&page=0&idSuc=$sucursalSeleccionada',
+          '${widget.baseUrl}/api/inventario?q=$busqueda&page=$_paginaActual&idSuc=$sucursalSeleccionada',
         ),
       );
 
@@ -130,21 +130,31 @@ class _TiendaScreenState extends State<TiendaScreen> {
       );
       if (res.statusCode == 200) {
         final data = json.decode(res.body);
+
+        final prefs = await SharedPreferences.getInstance();
+        int? savedId = prefs.getInt('saved_sucursal_id');
+        String? savedNombre = prefs.getString('saved_sucursal_nombre');
+
         setState(() {
-          sucursales = data;
-          if (sucursales.isNotEmpty) {
+        sucursales = data;
+        if (sucursales.isNotEmpty) {
+          if (savedId != null) {
+            // Si hay una guardada, intentamos encontrarla en la lista que bajó de la API
+            sucursalActual = sucursales.firstWhere(
+              (s) => (s['ID'] ?? s['id'] ?? s['Id']).toString() == savedId.toString(),
+              orElse: () => sucursales[0], // Si no la encuentra, usa la primera
+            );
+            sucursalSeleccionada = savedId;
+            nombreSucursal = savedNombre ?? "Sucursal";
+          } else {
+            // Si es la primera vez (no hay nada guardado), usa la primera por defecto
             sucursalActual = sucursales[0];
-            var rawId =
-                sucursalActual['ID'] ??
-                sucursalActual['id'] ??
-                sucursalActual['Id'];
+            var rawId = sucursalActual['ID'] ?? sucursalActual['id'] ?? sucursalActual['Id'];
             sucursalSeleccionada = int.tryParse(rawId.toString()) ?? 1;
-            nombreSucursal =
-                sucursalActual['sucursal'] ??
-                sucursalActual['Nombre'] ??
-                "Sucursal";
+            nombreSucursal = sucursalActual['sucursal'] ?? "Sucursal";
           }
-        });
+        }
+      });
         _cargarDatosIniciales();
       }
     } catch (e) {
@@ -247,17 +257,27 @@ class _TiendaScreenState extends State<TiendaScreen> {
     );
   }
 
-  void _cambiarSucursal(dynamic suc) {
-    setState(() {
-      sucursalActual = suc;
-      var rawId = suc['ID'] ?? suc['id'] ?? suc['Id'];
-      sucursalSeleccionada = int.tryParse(rawId.toString()) ?? 1;
-      nombreSucursal = suc['sucursal'] ?? "Sucursal";
-      productos = [];
-      _paginaActual = 0;
-    });
-    _cargarDatosIniciales();
-  }
+  void _cambiarSucursal(dynamic suc) async {
+  // 1. Obtenemos la instancia de memoria
+  final prefs = await SharedPreferences.getInstance();
+  
+  var rawId = suc['ID'] ?? suc['id'] ?? suc['Id'];
+  int id = int.tryParse(rawId.toString()) ?? 1;
+  String nombre = suc['sucursal'] ?? "Sucursal";
+
+  // 2. Guardamos permanentemente
+  await prefs.setInt('saved_sucursal_id', id);
+  await prefs.setString('saved_sucursal_nombre', nombre);
+
+  setState(() {
+    sucursalActual = suc;
+    sucursalSeleccionada = id;
+    nombreSucursal = nombre;
+    productos = [];
+    _paginaActual = 0;
+  });
+  _cargarDatosIniciales();
+}
 
   Future<void> _actualizarContadorCarrito() async {
     try {
@@ -456,10 +476,13 @@ class _TiendaScreenState extends State<TiendaScreen> {
               // Borramos los datos del cliente
               await prefs.remove('cliente_id');
               await prefs.remove('cliente_nombre');
+             
 
               if (!mounted) return;
               Navigator.pop(context); // Cerramos el diálogo
-
+              setState(() {
+                  nombreCliente = "Invitado";
+                });
               // Refrescamos la sesión para que cambie a "Invitado"
               _cargarSesion();
 
@@ -628,9 +651,10 @@ class _TiendaScreenState extends State<TiendaScreen> {
                 ],
               ),
               // Nombre del cliente DEBAJO
-              if (nombreCliente != null && nombreCliente != "Invitado")
                 Text(
-                  "Hola, $nombreCliente",
+                  (nombreCliente == null || nombreCliente == "Invitado")
+                      ? "Hola invitado"
+                      : "Hola, $nombreCliente",
                   style: const TextStyle(
                     fontSize: 11,
                     color: Colors.white,
@@ -692,24 +716,29 @@ class _TiendaScreenState extends State<TiendaScreen> {
                   _mostrarModalSucursales, // Asegúrate de que esta sea tu función
             ),
           // 3. CERRAR SESIÓN (Ahora al final)
-          IconButton(
-            icon: Icon(
-              nombreCliente == "Invitado" ? Icons.login : Icons.logout,
-              size: 22,
-            ),
-            onPressed: () {
-              if (nombreCliente == "Invitado") {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => LoginScreen(baseUrl: widget.baseUrl),
-                  ),
-                ).then((_) => _cargarSesion());
-              } else {
-                _mostrarDialogoCerrarSesion();
-              }
-            },
+         IconButton(
+          icon: Icon(
+            // Si es invitado, mostramos un icono de "Usuario/Perfil" para invitar a entrar
+            // Si ya inició sesión, mostramos el icono clásico de "Salir"
+            nombreCliente == "Invitado" 
+                ? Icons.account_circle_outlined 
+                : Icons.exit_to_app, 
+            size: 26, // Lo hacemos un poco más grande para que se vea mejor
           ),
+          tooltip: nombreCliente == "Invitado" ? "Iniciar Sesión" : "Cerrar Sesión",
+          onPressed: () {
+            if (nombreCliente == "Invitado") {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => LoginScreen(baseUrl: widget.baseUrl),
+                ),
+              ).then((_) => _cargarSesion());
+            } else {
+              _mostrarDialogoCerrarSesion();
+            }
+          },
+        ),
         ],
         bottom: PreferredSize(
           // Reducimos la altura de 110 a 90 para que sea más delgada
