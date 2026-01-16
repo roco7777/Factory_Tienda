@@ -48,41 +48,47 @@ class _CarritoScreenState extends State<CarritoScreen> {
   }
 
   Future<void> _actualizarCantidad(dynamic item, int nuevaCantidad) async {
-    if (nuevaCantidad < 1) return;
+    // --- GUARDIA DE SEGURIDAD ---
+    // Si el usuario intenta bajar de 1, no hacemos nada.
+    if (nuevaCantidad < 1) {
+      // Opcional: Podrías llamar a _eliminarItem(item['p_id'])
+      // si quieres que al bajar de 1 se borre el producto.
+      return;
+    }
 
-    // Lógica de escalonamiento de precios
-    double p1 =
-        double.tryParse(
-          item['Precio1']?.toString() ?? item['p_price'].toString(),
-        ) ??
-        0;
-    double p2 = double.tryParse(item['Precio2']?.toString() ?? '0') ?? 0;
-    double p3 = double.tryParse(item['Precio3']?.toString() ?? '0') ?? 0;
-    int min2 = int.tryParse(item['Min2']?.toString() ?? '0') ?? 0;
-    int min3 = int.tryParse(item['Min3']?.toString() ?? '0') ?? 0;
+    int stock =
+        (double.tryParse(item['stock_disponible']?.toString() ?? '0') ?? 0)
+            .toInt();
+    int cantidadActual = (double.tryParse(item['qty']?.toString() ?? '0') ?? 0)
+        .toInt();
 
-    double nuevoPrecio = p1;
-    if (nuevaCantidad >= min3 && min3 > 0) {
-      nuevoPrecio = p3;
-    } else if (nuevaCantidad >= min2 && min2 > 0) {
-      nuevoPrecio = p2;
+    if (nuevaCantidad > cantidadActual && nuevaCantidad > stock) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Límite alcanzado: $stock pz disponibles"),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
     }
 
     try {
-      await http.post(
+      final res = await http.post(
         Uri.parse('${widget.baseUrl}/api/agregar_carrito'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
           'p_id': item['p_id'],
           'qty': nuevaCantidad,
-          'p_price': nuevoPrecio,
+          'p_price': item['p_price'].toString(),
           'ip_add': 'APP_USER',
           'num_suc': item['num_suc'],
+          'is_increment': false,
         }),
       );
-      _obtenerCarrito();
+
+      if (res.statusCode == 200) _obtenerCarrito();
     } catch (e) {
-      debugPrint("Error al actualizar: $e");
+      debugPrint("Error: $e");
     }
   }
 
@@ -158,6 +164,8 @@ class _CarritoScreenState extends State<CarritoScreen> {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     String clienteId = prefs.getString('cliente_id') ?? "0";
     String nombreCliente = prefs.getString('cliente_nombre') ?? "Cliente";
+
+    // Obtenemos el ID de la sucursal del primer producto en el carrito
     int sucId = items.isNotEmpty
         ? int.parse(items[0]['num_suc'].toString())
         : 1;
@@ -177,6 +185,12 @@ class _CarritoScreenState extends State<CarritoScreen> {
 
       if (res.statusCode == 200) {
         String invoiceNo = data['invoice_no'].toString();
+
+        // --- CAMBIO CLAVE: RECUPERAMOS EL TELÉFONO DINÁMICO ---
+        // Si por alguna razón viene vacío, puedes poner uno de respaldo
+        String telefonoDestino =
+            data['whatsapp_phone']?.toString() ?? "521XXXXXXXXXX";
+
         String listaProductos = "";
         for (var i in items) {
           listaProductos += "• ${i['qty']} pz - ${i['Descripcion']}\n";
@@ -191,14 +205,19 @@ class _CarritoScreenState extends State<CarritoScreen> {
             "----------------------------------\n"
             "💰 *TOTAL:* ${formatCurrency(_calcularTotal())}";
 
-        await _abrirWhatsApp("521XXXXXXXXXX", mensaje);
-        setState(() => items = []);
+        // USAMOS LA VARIABLE DEL TELÉFONO QUE VIENE DE LA BASE DE DATOS
+        await _abrirWhatsApp(telefonoDestino, mensaje);
+
+        setState(() => items = []); // Limpiamos el carrito localmente
         _mostrarExito();
       } else if (data['error'] == "SIN_STOCK") {
         _mostrarAlertaSinStock(data['message']);
       }
     } catch (e) {
       debugPrint("Error al finalizar: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Error al procesar el pedido")),
+      );
     } finally {
       setState(() => cargando = false);
     }
@@ -328,15 +347,14 @@ class _CarritoScreenState extends State<CarritoScreen> {
   }
 
   Widget _botonCant(IconData icono, VoidCallback accion) {
-    return GestureDetector(
-      onTap: accion,
-      child: Container(
-        padding: const EdgeInsets.all(6),
-        decoration: BoxDecoration(
-          color: Colors.grey[200],
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Icon(icono, size: 18, color: Colors.black87),
+    return IconButton(
+      onPressed: accion,
+      constraints: const BoxConstraints(), // Quita el espacio extra por defecto
+      padding: const EdgeInsets.all(8), // Da un área de toque cómoda
+      icon: Icon(icono, size: 22, color: Colors.black87),
+      style: IconButton.styleFrom(
+        backgroundColor: Colors.grey[200],
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     );
   }
@@ -396,9 +414,15 @@ class _CarritoScreenState extends State<CarritoScreen> {
                     itemCount: items.length,
                     itemBuilder: (context, index) {
                       final item = items[index];
-                      int qty = int.tryParse(item['qty'].toString()) ?? 1;
+                      int qty =
+                          (double.tryParse(item['qty']?.toString() ?? '1') ?? 1)
+                              .toInt();
+                      print(
+                        "Producto: ${item['Descripcion']} - Sucursal: ${item['num_suc']}",
+                      );
                       double precio =
-                          double.tryParse(item['p_price'].toString()) ?? 0;
+                          double.tryParse(item['p_price']?.toString() ?? '0') ??
+                          0;
 
                       return Card(
                         margin: const EdgeInsets.symmetric(

@@ -386,28 +386,38 @@ class _TiendaScreenState extends State<TiendaScreen> {
           'p_price': price.toString(),
           'ip_add': 'APP_USER',
           'num_suc': sucursalSeleccionada,
+          'is_increment': true,
         }),
       );
+
       if (res.statusCode == 200) {
-        Navigator.pop(context);
+        if (mounted) Navigator.pop(context); // Éxito: Cerramos modal
         _reproducirBip();
-        Future.delayed(const Duration(milliseconds: 200), () {
-          if (mounted) _actualizarContadorCarrito();
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("Agregado al almacén: $nombreSucursal"),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 2),
-          ),
-        );
+        _actualizarContadorCarrito();
       } else {
         final errorData = json.decode(res.body);
-        if (errorData['error'] == "DIFERENTE_SUCURSAL")
+
+        if (errorData['error'] == "DIFERENTE_SUCURSAL") {
           _mostrarAlertaVaciarCarrito();
+        } else {
+          // --- NUEVO: Alerta de Stock que sí se ve ---
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text("Atención"),
+              content: Text(errorData['message'] ?? "Sin stock"),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text("ACEPTAR"),
+                ),
+              ],
+            ),
+          );
+        }
       }
     } catch (e) {
-      debugPrint("Error carrito: $e");
+      debugPrint("Error: $e");
     }
   }
 

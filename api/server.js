@@ -134,15 +134,22 @@ app.post('/api/carrito/vaciar', async (req, res) => {
 app.post('/api/finalizar_pedido', async (req, res) => {
     const { ip_add, customer_id, num_suc } = req.body;
     const user_ip = ip_add || 'APP_USER';
-    const tablaAlm = `alm${num_suc}`; // alm1, alm2, etc.
+    const tablaAlm = `alm${num_suc}`; 
     const invoice_no = Math.floor(Date.now() / 1000); 
 
     let conn;
     try {
         conn = await db.getConnection();
-        await conn.beginTransaction(); // Iniciamos transacción para que nada falle a medias
+        await conn.beginTransaction(); 
 
-        // 1. Obtener productos del carrito con su CLAVE y DESCRIPCION (unimos con tabla productos)
+        // --- NUEVO: OBTENER WHATSAPP DE LA SUCURSAL ---
+        const [empresaData] = await conn.execute(
+            "SELECT TelefonoWhatsapp FROM empresa WHERE Id = ?",
+            [num_suc]
+        );
+        const whatsappDestino = empresaData[0]?.TelefonoWhatsapp || "";
+
+        // 1. Obtener productos del carrito
         const [cartItems] = await conn.execute(
             `SELECT c.p_id, c.qty, c.p_price, p.Clave, p.Descripcion 
              FROM cart c 
@@ -166,7 +173,6 @@ app.post('/api/finalizar_pedido', async (req, res) => {
             const existenciaActual = stockData[0]?.ExisPVentas || 0;
 
             if (existenciaActual < item.qty) {
-                // Si un solo producto no tiene stock, cancelamos TODO el pedido
                 await conn.rollback();
                 return res.status(400).json({ 
                     success: false, 
@@ -176,7 +182,7 @@ app.post('/api/finalizar_pedido', async (req, res) => {
             }
         }
 
-        // 3. Si llegamos aquí, hay stock de todo. Procedemos a insertar en pending_orders
+        // 3. Inserción en pending_orders
         for (const item of cartItems) {
             await conn.execute(
                 `INSERT INTO pending_orders 
@@ -184,19 +190,19 @@ app.post('/api/finalizar_pedido', async (req, res) => {
                 VALUES (?, ?, ?, ?, ?, 'PENDIENTE', NOW(), ?)`,
                 [customer_id || 0, invoice_no, item.p_id, item.qty, item.p_price, num_suc]
             );
-
-            // OPCIONAL: Aquí podrías restar el stock de una vez si quisieras, 
-            // pero si tu sistema administrativo lo hace al procesar la factura, déjalo así.
         }
 
         // 4. Vaciamos el carrito
         await conn.execute("DELETE FROM cart WHERE ip_add = ?", [user_ip]);
 
-        await conn.commit(); // Guardamos todos los cambios en la DB
+        await conn.commit(); 
+
+        // 5. RESPUESTA FINAL CON EL TELÉFONO
         res.json({ 
             success: true, 
             message: "¡Pedido verificado y guardado!", 
-            invoice_no: invoice_no 
+            invoice_no: invoice_no,
+            whatsapp_phone: whatsappDestino 
         });
 
     } catch (e) {
@@ -207,6 +213,7 @@ app.post('/api/finalizar_pedido', async (req, res) => {
         if (conn) conn.release();
     }
 });
+
 // ==========================================
 // LOGIN Y CATALOGOS
 // ==========================================
@@ -344,22 +351,43 @@ app.get('/api/reportes/retiros-detalle', async (req, res) => {
 app.get('/api/carrito', async (req, res) => {
     const ip_add = req.query.ip_add || 'APP_USER';
     
+    // Esta consulta es más robusta: busca el stock en el almacén que indica el carrito
     const sql = `
         SELECT 
             c.p_id, c.qty, c.p_price, c.num_suc,
             p.Descripcion, p.Foto, p.Clave,
             p.Precio1, p.Precio2, p.Precio3, p.Min1, p.Min2, p.Min3,
-            COALESCE(e.sucursal, 'Almacén Principal') AS NombreSucursal
+            COALESCE(e.sucursal, 'Almacén') AS NombreSucursal,
+            -- Buscamos el stock dinámicamente según la sucursal de cada item
+            (SELECT ExisPVentas FROM 
+                (SELECT 'alm1' as t UNION SELECT 'alm2' UNION SELECT 'alm3' UNION SELECT 'alm4' UNION SELECT 'alm5') as tabs 
+                JOIN alm1 a1 ON c.num_suc = 1 AND p.Clave = a1.Clave
+                OR c.num_suc = 2 AND p.Clave = (SELECT Clave FROM alm2 WHERE Clave = p.Clave)
+                -- (Simplificado para mejor rendimiento abajo)
+                LIMIT 1
+            ) as stock_disponible
         FROM cart c 
         JOIN productos p ON c.p_id = p.Id 
         LEFT JOIN Empresa e ON c.num_suc = e.ID
         WHERE c.ip_add = ?`;
 
+    // VERSION SIMPLIFICADA Y EFECTIVA:
+    // Como usualmente un pedido es de una sola sucursal, usaremos el num_suc del primer item
     try {
-        const [results] = await db.execute(sql, [ip_add]);
+        const [items] = await db.execute("SELECT num_suc FROM cart WHERE ip_add = ? LIMIT 1", [ip_add]);
+        const sucId = items.length > 0 ? items[0].num_suc : 1;
+
+        const sqlFinal = `
+            SELECT c.*, p.Descripcion, p.Foto, p.Clave, p.Precio1, p.Precio2, p.Precio3, p.Min2, p.Min3,
+            a.ExisPVentas as stock_disponible
+            FROM cart c
+            JOIN productos p ON c.p_id = p.Id
+            LEFT JOIN alm${sucId} a ON p.Clave = a.Clave
+            WHERE c.ip_add = ?`;
+
+        const [results] = await db.execute(sqlFinal, [ip_add]);
         res.json(results);
     } catch (e) {
-        console.error("Error al obtener carrito:", e.message);
         res.status(500).json({ error: e.message });
     }
 });
@@ -377,32 +405,65 @@ app.get('/api/carrito/contar', async (req, res) => {
 // AGREGAR AL CARRITO (Asegúrate de que este bloque esté en server.js)
 // BUSCA ESTA RUTA Y AJUSTA EL SQL:
 app.post('/api/agregar_carrito', async (req, res) => {
-    let { p_id, qty, p_price, ip_add, num_suc } = req.body;
+    const { p_id, qty, p_price, ip_add, num_suc, is_increment } = req.body;
     const user_ip = ip_add || 'APP_USER';
-    
-    // Forzamos que sea un número real. Si no se puede, es 1.
-    const cantidad = Number(qty) || 1; 
-    const precio = Number(p_price) || 0;
+    const tablaAlm = `alm${num_suc}`;
 
     try {
-        // ... (validación de sucursal)
+        // 1. Obtener Stock y Cantidad actual en el carrito
+        const [prodInfo] = await db.execute(
+            `SELECT p.Clave, a.ExisPVentas FROM productos p 
+             LEFT JOIN ${tablaAlm} a ON p.Clave = a.Clave WHERE p.Id = ?`, [p_id]
+        );
+        const [cartInfo] = await db.execute(
+            "SELECT qty FROM cart WHERE p_id = ? AND ip_add = ?", [p_id, user_ip]
+        );
 
-        const sql = `
-            INSERT INTO cart (p_id, ip_add, qty, p_price, num_suc) 
-            VALUES (?, ?, ?, ?, ?) 
-            ON DUPLICATE KEY UPDATE 
-                qty = qty + VALUES(qty), 
-                p_price = VALUES(p_price)`;
+        const stockDisponible = prodInfo[0]?.ExisPVentas || 0;
+        const cantidadActual = cartInfo.length > 0 ? cartInfo[0].qty : 0;
+        const stockLimpio = Math.floor(parseFloat(stockDisponible));
         
-        // Usamos las constantes 'cantidad' y 'precio' que ya son números
-        await db.execute(sql, [p_id, user_ip, cantidad, precio, num_suc]);
-        
+        let nuevaCantidadFinal = is_increment ? (cantidadActual + parseInt(qty)) : parseInt(qty);
+
+        // --- BLOQUEO DE SEGURIDAD PARA MÍNIMOS ---
+        // Si la nueva cantidad es menor a 1, detenemos el proceso
+        if (nuevaCantidadFinal < 1) {
+            return res.status(400).json({
+                success: false,
+                error: "CANTIDAD_MINIMA",
+                message: "La cantidad mínima permitida es 1 pieza."
+            });
+        }
+
+        // --- VALIDACIÓN DE STOCK ---
+        // Solo validamos stock si el usuario está aumentando la cantidad
+        if (nuevaCantidadFinal > cantidadActual) {
+            if (nuevaCantidadFinal > stockDisponible) {
+                return res.status(400).json({ 
+                    success: false, 
+                    error: "SIN_STOCK", 
+                    message: `Stock insuficiente. Máximo disponible: ${stockLimpio}` 
+                });
+            }
+        }
+
+        if (cartInfo.length > 0) {
+            await db.execute(
+                "UPDATE cart SET qty = ?, p_price = ?, num_suc = ? WHERE p_id = ? AND ip_add = ?",
+                [nuevaCantidadFinal, p_price, num_suc, p_id, user_ip]
+            );
+        } else {
+            await db.execute(
+                "INSERT INTO cart (p_id, ip_add, qty, p_price, num_suc) VALUES (?, ?, ?, ?, ?)",
+                [p_id, user_ip, nuevaCantidadFinal, p_price, num_suc]
+            );
+        }
         res.json({ success: true });
     } catch (e) {
-        console.error("Error en agregar_carrito:", e.message);
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({ error: e.message });
     }
 });
+
 // ELIMINAR DEL CARRITO
 app.post('/api/carrito/eliminar', async (req, res) => {
     const { p_id, ip_add } = req.body;
