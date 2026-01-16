@@ -1,0 +1,21 @@
+# --- Node.js (API) ---
+node_modules/
+npm-debug.log
+.env
+
+# --- Flutter (app_movil) ---
+app_movil/.dart_tool/
+app_movil/.flutter-plugins
+app_movil/.flutter-plugins-dependencies
+app_movil/.packages
+app_movil/build/
+app_movil/ios/Flutter/Generated.xcconfig
+app_movil/android/app/src/main/res/raw/
+app_movil/android/.gradle/
+
+# --- IDEs y Sistema ---
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
