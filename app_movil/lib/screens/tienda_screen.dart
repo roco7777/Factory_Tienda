@@ -1,16 +1,16 @@
 import 'package:flutter/material.dart';
-import 'dart:convert'; // Solo se queda para manejar respuestas de error específicas
+import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../core/constants.dart';
 import 'carrito_screen.dart';
-import 'inventario_screen.dart';
 import 'login_screen.dart';
-import 'admin_login_screen.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'detalle_producto_screen.dart';
 import '../widgets/product_card.dart';
 import '../widgets/tienda_modals.dart';
-import '../services/tienda_service.dart'; // NUEVO IMPORT
+import '../services/tienda_service.dart';
+
+// NOTA: Se eliminaron los imports de Admin e Inventario
 
 class TiendaScreen extends StatefulWidget {
   final String baseUrl;
@@ -27,8 +27,8 @@ class _TiendaScreenState extends State<TiendaScreen> {
   List<dynamic> sucursales = [];
   dynamic sucursalActual;
   String? nombreCliente;
-  String? rolAdmin;
 
+  // Eliminamos rolAdmin porque el cliente nunca es admin
   String nombreSucursal = "Sucursal";
   String categoriaSeleccionada = "TODOS";
   bool cargando = false;
@@ -71,45 +71,13 @@ class _TiendaScreenState extends State<TiendaScreen> {
 
   // --- MÉTODOS DE DATOS Y SESIÓN ---
 
-  void _mostrarConfiguracionUrl() {
-    TextEditingController urlCtrl = TextEditingController(text: widget.baseUrl);
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("Configuración de Red"),
-        content: TextField(
-          controller: urlCtrl,
-          decoration: const InputDecoration(hintText: "http://100.x.y.z:3000"),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("CANCELAR"),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setString('custom_api_url', urlCtrl.text);
-              if (mounted) {
-                Navigator.pop(context);
-                // Aquí podrías reiniciar la App o refrescar la conexión
-              }
-            },
-            child: const Text("GUARDAR Y REINICIAR"),
-          ),
-        ],
-      ),
-    );
-  }
-
   Future<void> _cargarSesion() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() {
       String nombreCompleto = prefs.getString('cliente_nombre') ?? "Invitado";
       nombreCliente = nombreCompleto.split(' ')[0];
-      rolAdmin = prefs.getString('saved_rol');
+      // Ya no cargamos rol de admin aquí
     });
   }
 
@@ -118,7 +86,6 @@ class _TiendaScreenState extends State<TiendaScreen> {
     setState(() => cargando = true);
 
     try {
-      // Cargamos categorías si están vacías usando el Service
       if (categorias.isEmpty) {
         categorias = await TiendaService.fetchCategorias(widget.baseUrl);
       }
@@ -127,7 +94,6 @@ class _TiendaScreenState extends State<TiendaScreen> {
           ? ""
           : categoriaSeleccionada;
 
-      // Llamada al Service
       final data = await TiendaService.fetchInventario(
         baseUrl: widget.baseUrl,
         query: busqueda,
@@ -159,26 +125,14 @@ class _TiendaScreenState extends State<TiendaScreen> {
 
   Future<void> _cargarSucursales() async {
     try {
-      // 1. Traemos las sucursales del servidor
       final data = await TiendaService.fetchSucursales(widget.baseUrl);
       final prefs = await SharedPreferences.getInstance();
-
-      // Recuperamos lo que el usuario tenía guardado
       int? savedId = prefs.getInt('saved_sucursal_id');
-
-      debugPrint("--- DEBUG: Sucursal guardada en memoria: $savedId ---");
-      debugPrint(
-        "--- DEBUG: Sucursales recibidas del ProLiant: ${data.length} ---",
-      );
 
       if (mounted) {
         setState(() {
           sucursales = data;
-
           if (sucursales.isNotEmpty) {
-            // 2. BUSQUEDA INTELIGENTE:
-            // Intentamos buscar la sucursal guardada.
-            // Si no existe (porque ahora es invisible) o es la primera vez, tomamos la primera de la lista.
             sucursalActual = sucursales.firstWhere(
               (s) =>
                   (s['ID'] ?? s['id'] ?? s['Id']).toString() ==
@@ -186,32 +140,20 @@ class _TiendaScreenState extends State<TiendaScreen> {
               orElse: () => sucursales[0],
             );
 
-            // 3. ACTUALIZAMOS LOS VALORES REALES (Usando lo que dice el SERVIDOR, no la memoria)
             var rawId =
                 sucursalActual['ID'] ??
                 sucursalActual['id'] ??
                 sucursalActual['Id'];
-            sucursalSeleccionada =
-                int.tryParse(rawId.toString()) ??
-                2; // ID 2 por defecto si falla
+            sucursalSeleccionada = int.tryParse(rawId.toString()) ?? 2;
             nombreSucursal = sucursalActual['sucursal'] ?? "Sucursal";
 
-            // 4. GUARDAMOS EN MEMORIA lo que realmente quedó seleccionado
             prefs.setInt('saved_sucursal_id', sucursalSeleccionada);
             prefs.setString('saved_sucursal_nombre', nombreSucursal);
-
-            debugPrint(
-              "--- DEBUG: Seleccionada finalmente: $nombreSucursal (ID: $sucursalSeleccionada) ---",
-            );
           }
         });
-
-        // 5. Una vez que el setState terminó y tenemos sucursal, cargamos productos
         _cargarDatosIniciales();
       }
     } catch (e) {
-      debugPrint("!!! ERROR CRÍTICO EN CARGA DE SUCURSALES: $e");
-      // Si falla, al menos intentamos cargar la sucursal 2 (TUXTLA) que sabemos que existe
       if (mounted) {
         setState(() {
           sucursalSeleccionada = 2;
@@ -274,8 +216,6 @@ class _TiendaScreenState extends State<TiendaScreen> {
 
       if (res.statusCode == 200 && mounted) {
         _actualizarContadorCarrito();
-
-        // --- NUEVO AVISO VISUAL PERSONALIZADO ---
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Row(
@@ -286,13 +226,12 @@ class _TiendaScreenState extends State<TiendaScreen> {
                     style: TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
-                Icon(Icons.check_circle, color: Colors.blue), // Palomita azul
+                Icon(Icons.check_circle, color: Colors.blue),
               ],
             ),
             backgroundColor: Colors.green,
             duration: const Duration(seconds: 2),
-            behavior: SnackBarBehavior
-                .floating, // Para que no lo tape la barra de Android
+            behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(10),
             ),
@@ -364,14 +303,6 @@ class _TiendaScreenState extends State<TiendaScreen> {
       }
     } catch (e) {
       debugPrint("Error contador: $e");
-    }
-  }
-
-  Future<void> _reproducirBip() async {
-    try {
-      await _audioPlayer.play(AssetSource('sounds/beep.mp3'));
-    } catch (e) {
-      debugPrint("Error sonido: $e");
     }
   }
 
@@ -529,77 +460,37 @@ class _TiendaScreenState extends State<TiendaScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      // El drawer se mantiene igual
-      drawer: rolAdmin != null
-          ? Drawer(
-              child: ListView(
-                padding: EdgeInsets.zero,
-                children: [
-                  DrawerHeader(
-                    decoration: BoxDecoration(color: rojoFactory),
-                    child: const Text(
-                      "Opciones de Admin",
-                      style: TextStyle(color: Colors.white, fontSize: 20),
-                    ),
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.inventory),
-                    title: const Text("Panel de Inventario"),
-                    onTap: () {
-                      Navigator.pop(context);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => PantallaInventario(
-                            userRole: rolAdmin!,
-                            baseUrl: widget.baseUrl,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ],
-              ),
-            )
-          : null,
+      // --- MODIFICACIÓN CLAVE: DRAWER ELIMINADO ---
+      drawer: null,
+
       appBar: AppBar(
         backgroundColor: rojoFactory,
         foregroundColor: Colors.white,
-        title: GestureDetector(
-          onLongPress: () => Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => AdminLoginScreen(baseUrl: widget.baseUrl),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // --- MODIFICACIÓN CLAVE: Título simple, sin GestureDetector secreto ---
+            const Text(
+              "Factory Mayoreo",
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
             ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                "Factory Mayoreo",
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
-              ),
-              Row(
-                children: [
-                  const Icon(Icons.storefront, size: 12, color: Colors.white70),
-                  const SizedBox(width: 4),
-                  Text(
-                    nombreSucursal,
-                    style: const TextStyle(fontSize: 10, color: Colors.white70),
-                  ),
-                ],
-              ),
-              Text(
-                (nombreCliente == null || nombreCliente == "Invitado")
-                    ? "Hola invitado"
-                    : "Hola, $nombreCliente",
-                style: const TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
+            Row(
+              children: [
+                const Icon(Icons.storefront, size: 12, color: Colors.white70),
+                const SizedBox(width: 4),
+                Text(
+                  nombreSucursal,
+                  style: const TextStyle(fontSize: 10, color: Colors.white70),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
+            Text(
+              (nombreCliente == null || nombreCliente == "Invitado")
+                  ? "Hola invitado"
+                  : "Hola, $nombreCliente",
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+            ),
+          ],
         ),
         actions: [
           _buildBotonCarrito(),
@@ -615,10 +506,9 @@ class _TiendaScreenState extends State<TiendaScreen> {
           child: _buildBuscadorYCategorias(),
         ),
       ),
-      // --- AQUÍ APLICAMOS EL CAMBIO PARA HACERLA UNIVERSAL ---
       body: SafeArea(
-        bottom: true, // Protege contra la barra de navegación de Android
-        top: false, // El AppBar ya se encarga de la parte de arriba
+        bottom: true,
+        top: false,
         child: Column(
           children: [
             Expanded(
@@ -628,7 +518,6 @@ class _TiendaScreenState extends State<TiendaScreen> {
                   ? const Center(child: Text("Sin stock en este almacén"))
                   : GridView.builder(
                       controller: _scrollController,
-                      // Añadimos un poco más de padding al fondo para asegurar que el último botón respire
                       padding: const EdgeInsets.only(
                         left: 8,
                         right: 8,
@@ -659,7 +548,9 @@ class _TiendaScreenState extends State<TiendaScreen> {
       ),
     );
   }
+
   // --- WIDGETS DE APOYO DE UI ---
+  // (Sin cambios mayores, solo cosméticos si aplicaba)
 
   Widget _buildBuscadorYCategorias() {
     return Column(
@@ -670,8 +561,7 @@ class _TiendaScreenState extends State<TiendaScreen> {
             height: 40,
             child: TextField(
               controller: buscadorCtrl,
-              textAlignVertical: TextAlignVertical
-                  .center, // <-- ESTO CENTRA EL TEXTO VERTICALMENTE
+              textAlignVertical: TextAlignVertical.center,
               decoration: InputDecoration(
                 hintText: "Buscar productos...",
                 hintStyle: const TextStyle(color: Colors.grey, fontSize: 14),
@@ -682,7 +572,6 @@ class _TiendaScreenState extends State<TiendaScreen> {
                 ),
                 fillColor: Colors.white,
                 filled: true,
-                // Ajustamos el padding interno para que no empuje el texto
                 contentPadding: const EdgeInsets.symmetric(
                   horizontal: 15,
                   vertical: 0,

@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'core/constants.dart';
-import 'screens/inventario_screen.dart';
 import 'screens/tienda_screen.dart';
-import 'package:app_movil/services/tienda_service.dart'; //
+import 'package:factory_tienda/services/tienda_service.dart';
 
 void main() async {
   // 1. Inicialización necesaria para usar SharedPreferences antes del runApp
@@ -64,10 +63,9 @@ class _RootHandlerState extends State<RootHandler> {
   Future<void> _decidirRuta() async {
     final prefs = await SharedPreferences.getInstance();
 
-    // 1. Intentamos actualizar la URL desde la base de datos
-    // Usamos la URL que ya traemos para preguntar si hay una nueva
+    // 1. Lógica de URL Dinámica (VITAL: Se mantiene igual)
+    // Esto permite que la app sepa si cambiaste de IP local a Tailscale
     String? urlNueva = await TiendaService.obtenerUrlRemota(widget.baseUrl);
-
     String urlFinal = widget.baseUrl;
 
     if (urlNueva != null && urlNueva != widget.baseUrl) {
@@ -77,28 +75,17 @@ class _RootHandlerState extends State<RootHandler> {
       debugPrint("--- URL AUTO-ACTUALIZADA: $urlFinal ---");
     }
 
-    final String? adminUser = prefs.getString('saved_user');
-    final String? adminRol = prefs.getString('saved_rol');
+    // --- LIMPIEZA DE SEGURIDAD ---
+    // En la app de Clientes, NO nos importa si hay un admin guardado.
+    // Siempre asumimos que es un cliente o invitado.
 
     if (!mounted) return;
 
-    // 2. Navegamos usando la urlFinal (que puede ser la misma o la nueva)
-    if (adminUser != null && adminRol != null) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (context) =>
-              PantallaInventario(userRole: adminRol, baseUrl: urlFinal),
-        ),
-      );
-    } else {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (context) => TiendaScreen(baseUrl: urlFinal),
-        ),
-      );
-    }
+    // 2. Navegación DIRECTA a la Tienda
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (context) => TiendaScreen(baseUrl: urlFinal)),
+    );
   }
 
   @override
