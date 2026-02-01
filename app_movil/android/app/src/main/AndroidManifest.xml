@@ -9,7 +9,7 @@
     </queries>
     
     <application
-        android:label="app_movil"
+        android:label="Factory Tienda"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">
