@@ -169,12 +169,21 @@ class _CarritoScreenState extends State<CarritoScreen> {
       setState(() => cargando = false);
 
       if (respuesta['status'] == 'ok') {
+        // En lugar de ir directo a finalizar, vamos al RESUMEN
         Navigator.push(
           context,
           MaterialPageRoute(
             builder: (context) => ConfirmacionPedidoScreen(
               baseUrl: widget.baseUrl,
-              onConfirmar: _finalizarPedido,
+              items: items, // Pasamos la lista de productos
+              total: _calcularTotal(), // Pasamos el total calculado
+              // Aquí pasamos la función que realmente guarda en la DB
+              onConfirmar: () {
+                // Cerramos la pantalla de confirmación
+                Navigator.pop(context);
+                // Y ejecutamos el proceso final
+                _finalizarPedido();
+              },
             ),
           ),
         );

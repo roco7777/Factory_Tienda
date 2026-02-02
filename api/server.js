@@ -5,6 +5,7 @@ const path = require('path');
 const multer = require('multer');
 const sharp = require('sharp');
 const fs = require('fs');
+const bcrypt = require('bcrypt');
 
 const app = express();
 app.use(cors());
@@ -323,13 +324,87 @@ console.log("Datos recibidos en el servidor:", req.body);
     }
 });
 
+// ==========================================
+// SEGURIDAD PLUS: LOGIN ADMINISTRATIVO
+// ==========================================
 app.post('/api/login', async (req, res) => { 
-    const { username, password } = req.body;
     try {
-        const [results] = await db.execute(`SELECT nombre, Rol FROM usuarios WHERE TRIM(nombre) = ? AND TRIM(password) = ?`, [username.trim(), password.trim()]);
-        if (results.length > 0) res.json({ success: true, user: results[0].nombre, rol: results[0].Rol });
-        else res.status(401).json({ success: false, message: 'Credenciales inválidas' });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+        // Extraemos de forma segura
+        const sqlPermisos = `
+    -- Permisos del Rol
+    SELECT p.slug, 1 as fuente FROM sec_permisos p
+    INNER JOIN sec_rol_permisos rp ON p.id_permiso = rp.id_permiso
+    WHERE rp.id_rol = ? AND p.activo = 1
+    
+    UNION
+    
+    -- Permisos específicos del Usuario (que sobrescriben al rol)
+    SELECT p.slug, 2 as fuente FROM sec_permisos p
+    INNER JOIN sec_usuario_permisos up ON p.id_permiso = up.id_permiso
+    WHERE up.id_usuario = ? AND up.valor = 1
+`;
+        const userBody = req.body.username || req.body.user || req.body.nombre || "";
+        const passBody = req.body.password || "";
+
+        if (!userBody || !passBody) {
+            return res.status(400).json({ success: false, message: 'Datos incompletos' });
+        }
+
+        const cleanUser = userBody.toString().trim();
+        const cleanPass = passBody.toString().trim();
+
+        // Consulta usando los nombres reales de tu tabla (Nombre)
+        const sqlUser = `
+            SELECT u.*, r.nombre_rol 
+            FROM usuarios u
+            LEFT JOIN sec_roles r ON u.id_rol = r.id_rol
+            WHERE TRIM(u.Nombre) = ?`;
+
+        const [users] = await db.execute(sqlUser, [cleanUser]);
+
+        if (users.length === 0) {
+            return res.status(401).json({ success: false, message: 'Usuario no encontrado' });
+        }
+
+        const user = users[0];
+        let loginExitoso = false;
+
+        // Verificación con bcrypt (usando la variable importada arriba)
+        if (user.password_hash) {
+            loginExitoso = await bcrypt.compare(cleanPass, user.password_hash);
+        } 
+        // Verificación Legacy (campo Password)
+        else if (user.Password && user.Password.toString().trim() === cleanPass) {
+            loginExitoso = true;
+            // Migración automática a Hash
+            const nuevoHash = await bcrypt.hash(cleanPass, 10);
+            await db.execute('UPDATE usuarios SET password_hash = ? WHERE CveUsuario = ?', [nuevoHash, user.CveUsuario]);
+        }
+
+        if (loginExitoso) {
+            const sqlPermisos = `
+                SELECT p.slug 
+                FROM sec_permisos p
+                INNER JOIN sec_rol_permisos rp ON p.id_permiso = rp.id_permiso
+                WHERE rp.id_rol = ? AND p.activo = 1`;
+            
+            const [permisos] = await db.execute(sqlPermisos, [user.id_rol]);
+            const listaSlugs = permisos.map(p => p.slug);
+
+            res.json({ 
+                success: true, 
+                user: user.Nombre, 
+                rol: user.nombre_rol || user.Rol,
+                permisos: listaSlugs 
+            });
+        } else {
+            res.status(401).json({ success: false, message: 'Clave incorrecta' });
+        }
+
+    } catch (e) { 
+        console.error("Error en login administrativo:", e); // Esto ahora saldrá bien en el log
+        res.status(500).json({ success: false, message: "Error interno" }); 
+    }
 });
 
 app.get('/api/tipos', async (req, res) => {
@@ -647,15 +722,26 @@ app.get('/api/inventario', async (req, res) => {
                      LIMIT ? OFFSET ?`;
             params = [limit, offset];
         } else {
-            // En búsquedas específicas, mantenemos el orden alfabético para que el usuario no se pierda
+            // Limpiamos el texto para evitar que espacios extras arruinen el LIKE
+            const searchPattern = `%${qRaw.trim()}%`;
+
             query = `SELECT ${camposSelect}
                      FROM PRODUCTOS p
                      INNER JOIN alm${idSuc} a ON p.Clave = a.Clave
-                     WHERE (p.Clave LIKE ? OR p.Descripcion LIKE ? OR p.Tipo LIKE ?) 
-                     AND p.status = 1 AND a.ExisPVentas > 0
-                     ORDER BY p.Descripcion ASC 
+                     WHERE p.status = 1 
+                     AND a.ExisPVentas > 0
+                     AND (
+                        p.Descripcion LIKE ? 
+                        OR p.Clave LIKE ? 
+                        OR p.Tipo LIKE ?
+                     )
+                     ORDER BY 
+                        (p.Descripcion LIKE ?) DESC, -- Los que EMPIEZAN con la palabra van primero
+                        p.Descripcion ASC 
                      LIMIT ? OFFSET ?`;
-            params = [q, q, q, limit, offset];
+            
+            // Pasamos el patrón de búsqueda para los 3 campos + 1 para el orden de relevancia
+            params = [searchPattern, searchPattern, searchPattern, `${qRaw.trim()}%`, limit, offset];
         }
 
         const [results] = await db.execute(query, params);
@@ -976,6 +1062,331 @@ app.post('/api/cliente/registrar', async (req, res) => {
             success: false, 
             error: "Error interno al procesar el registro" 
         });
+    }
+});
+
+// Listar roles para el dropdown en la App
+app.get('/api/roles', async (req, res) => {
+    try {
+        // Ahora ordenamos por el nivel jerárquico que acabamos de crear
+        const [rows] = await db.execute("SELECT id_rol, nombre_rol, nivel FROM sec_roles WHERE activo = 1 ORDER BY nivel ASC");
+        res.json(rows);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// Atajo rápido: Cambio de contraseña personal
+app.post('/api/usuarios/cambiar-pass', async (req, res) => {
+    const { nombre, nueva_pass } = req.body;
+    try {
+        const hash = await bcrypt.hash(nueva_pass.trim(), 10);
+        await db.execute("UPDATE usuarios SET password_hash = ?, password = ? WHERE nombre = ?", [hash, nueva_pass, nombre]);
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/usuarios/lista', async (req, res) => {
+    try {
+        const [rows] = await db.execute(`
+            SELECT 
+                u.CveUsuario, u.Nombre, u.NombreLargo, u.NumSuc, 
+                r.nombre_rol, r.nivel 
+            FROM usuarios u 
+            LEFT JOIN sec_roles r ON u.id_rol = r.id_rol 
+            ORDER BY r.nivel ASC, u.Nombre ASC`); // <--- Ordena por rango y luego por nombre
+        res.json(rows);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/usuarios/guardar', async (req, res) => {
+    console.log("-----------------------------------------");
+    console.log("PETICIÓN DE GUARDADO RECIBIDA");
+    console.log("BODY:", req.body);
+
+    const { id, nombre, nombreLargo, password, id_rol, num_suc, nombre_rol } = req.body;
+    
+    try {
+        // Determinamos la sucursal: Superusuarios siempre van a la 0 (Global)
+        const sucursalFinal = (nombre_rol === 'Superusuario') ? 0 : num_suc;
+        
+        // --- BLOQUE DE SEGURIDAD PARA EDICIÓN ---
+        if (id) {
+            // 1. Obtenemos el rol que tiene actualmente en la DB antes de actualizar
+            const [rowsActual] = await db.execute(`
+                SELECT r.nombre_rol 
+                FROM usuarios u 
+                JOIN sec_roles r ON u.id_rol = r.id_rol 
+                WHERE u.CveUsuario = ?`, [id]);
+
+            if (rowsActual.length > 0) {
+                const rolActual = rowsActual[0].nombre_rol;
+
+                // 2. Si es Superusuario y estás intentando cambiarle el rol a otra cosa...
+                if (rolActual === 'Superusuario' && nombre_rol !== 'Superusuario') {
+                    
+                    // 3. Contamos cuántos quedan en total
+                    const [superCount] = await db.execute(`
+                        SELECT COUNT(*) as total 
+                        FROM usuarios u 
+                        JOIN sec_roles r ON u.id_rol = r.id_rol 
+                        WHERE r.nombre_rol = 'Superusuario'`);
+
+                    if (superCount[0].total <= 1) {
+                        console.log("🚫 Intento de degradar al último Superusuario bloqueado.");
+                        return res.status(403).json({ 
+                            success: false, 
+                            message: "BLOQUEO DE SEGURIDAD: No puedes cambiar el rol al único Superusuario del sistema." 
+                        });
+                    }
+                }
+            }
+
+            // --- PROCEDER CON EL UPDATE ---
+            let hash = password ? await bcrypt.hash(password.trim(), 10) : null;
+            
+            let sql = `UPDATE usuarios SET \`Nombre\` = ?, \`NombreLargo\` = ?, \`id_rol\` = ?, \`NumSuc\` = ? 
+                      ${hash ? ', \`password_hash\` = ?, \`Password\` = ?' : ''} 
+                      WHERE \`CveUsuario\` = ?`;
+            
+            let params = hash 
+                ? [nombre, nombreLargo, id_rol, sucursalFinal, hash, password, id] 
+                : [nombre, nombreLargo, id_rol, sucursalFinal, id];
+                
+            const [result] = await db.execute(sql, params);
+            console.log("✅ Resultado UPDATE:", result);
+
+        } else {
+            // --- PROCEDER CON EL INSERT (USUARIO NUEVO) ---
+            const hash = await bcrypt.hash(password.trim(), 10);
+            const sql = `INSERT INTO usuarios (\`Nombre\`, \`NombreLargo\`, \`Password\`, \`password_hash\`, \`id_rol\`, \`NumSuc\`, \`FechaIni\`) 
+                        VALUES (?, ?, ?, ?, ?, ?, NOW())`;
+            
+            await db.execute(sql, [nombre, nombreLargo, password, hash, id_rol, sucursalFinal]);
+            console.log("✅ Usuario Nuevo Insertado");
+        }
+
+        res.json({ success: true });
+
+    } catch (e) {
+        console.error("❌ ERROR CRÍTICO EN GUARDADO:", e);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// Obtener todos los permisos y marcar cuáles tiene el usuario (por rol o por excepción)
+app.get('/api/usuarios/:id/permisos', async (req, res) => {
+    const { id } = req.params;
+    console.log(`Buscando permisos para el usuario ID: ${id}`); // Ver esto en pm2 logs
+    
+    try {
+        const sql = `
+            SELECT 
+                p.id_permiso, p.modulo, p.descripcion, p.slug,
+                -- Verificamos si el usuario tiene el permiso por su ROL asignado
+                IF(EXISTS(
+                    SELECT 1 FROM sec_rol_permisos rp 
+                    JOIN usuarios u ON rp.id_rol = u.id_rol 
+                    WHERE u.CveUsuario = ? AND rp.id_permiso = p.id_permiso
+                ), 1, 0) as tiene_por_rol,
+                -- Verificamos si tiene una excepción manual (Personalizado)
+                (SELECT valor FROM sec_usuario_permisos WHERE id_usuario = ? AND id_permiso = p.id_permiso) as valor_personalizado
+            FROM sec_permisos p 
+            WHERE p.activo = 1
+            ORDER BY p.modulo ASC, p.descripcion ASC`;
+
+        const [rows] = await db.execute(sql, [id, id]);
+        console.log(`Se encontraron ${rows.length} permisos.`);
+        res.json(rows);
+    } catch (e) {
+        console.error("ERROR EN GET PERMISOS:", e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Guardar o eliminar una excepción de permiso para un usuario
+app.post('/api/usuarios/permisos/personalizar', async (req, res) => {
+    const { id_usuario, id_permiso, valor } = req.body;
+    try {
+        // Borramos si ya existía una excepción previa
+        await db.execute("DELETE FROM sec_usuario_permisos WHERE id_usuario = ? AND id_permiso = ?", [id_usuario, id_permiso]);
+        
+        // Insertamos la nueva excepción
+        if (valor !== null) {
+            await db.execute("INSERT INTO sec_usuario_permisos (id_usuario, id_permiso, valor) VALUES (?, ?, ?)", 
+            [id_usuario, id_permiso, valor]);
+        }
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Obtener permisos de un Rol específico
+app.get('/api/roles/:id/permisos', async (req, res) => {
+    const { id } = req.params;
+    console.log(`Buscando molde de permisos para el ROL ID: ${id}`);
+    try {
+        const sql = `
+            SELECT 
+                p.id_permiso, p.modulo, p.descripcion, p.slug,
+                IF(EXISTS(SELECT 1 FROM sec_rol_permisos rp WHERE rp.id_rol = ? AND rp.id_permiso = p.id_permiso), 1, 0) as asignado
+            FROM sec_permisos p 
+            WHERE p.activo = 1
+            ORDER BY p.modulo ASC, p.descripcion ASC`;
+            
+        const [rows] = await db.execute(sql, [id]);
+        res.json(rows);
+    } catch (e) {
+        console.error("ERROR EN ROLES PERMISOS:", e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Asignar o quitar permiso a un Rol
+app.post('/api/roles/permisos/update', async (req, res) => {
+    const { id_rol, id_permiso, asignar } = req.body;
+    try {
+        if (asignar) {
+            await db.execute("INSERT IGNORE INTO sec_rol_permisos (id_rol, id_permiso) VALUES (?, ?)", [id_rol, id_permiso]);
+        } else {
+            await db.execute("DELETE FROM sec_rol_permisos WHERE id_rol = ? AND id_permiso = ?", [id_rol, id_permiso]);
+        }
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/usuarios/eliminar', async (req, res) => {
+    const { id } = req.body;
+
+    try {
+        // 1. Buscamos info del usuario que queremos borrar
+        const [userRows] = await db.execute(`
+            SELECT u.Nombre, r.nombre_rol 
+            FROM usuarios u 
+            LEFT JOIN sec_roles r ON u.id_rol = r.id_rol 
+            WHERE u.CveUsuario = ?`, [id]);
+
+        if (userRows.length === 0) {
+            return res.status(404).json({ success: false, message: "Usuario no encontrado." });
+        }
+
+        const usuarioABorrar = userRows[0];
+
+        // 2. VALIDACIÓN: No se puede borrar un Superusuario directamente
+        if (usuarioABorrar.nombre_rol === 'Superusuario') {
+            
+            // 3. VALIDACIÓN EXTRA: ¿Es el último Superusuario?
+            const [superCount] = await db.execute(`
+                SELECT COUNT(*) as total FROM usuarios u 
+                JOIN sec_roles r ON u.id_rol = r.id_rol 
+                WHERE r.nombre_rol = 'Superusuario'`);
+
+            if (superCount[0].total <= 1) {
+                return res.status(403).json({ 
+                    success: false, 
+                    message: "ERROR CRÍTICO: No puedes eliminar al único Superusuario del sistema." 
+                });
+            }
+
+            return res.status(403).json({ 
+                success: false, 
+                message: "Protección de Rango: No puedes eliminar a un Superusuario. Primero cámbiale el rol a uno inferior." 
+            });
+        }
+
+        // 4. Si pasó las pruebas, procedemos al borrado limpio
+        await db.execute("DELETE FROM sec_usuario_permisos WHERE id_usuario = ?", [id]);
+        await db.execute("DELETE FROM usuarios WHERE CveUsuario = ?", [id]);
+
+        res.json({ success: true, message: "Usuario eliminado con éxito." });
+
+    } catch (e) {
+        console.error("ERROR AL ELIMINAR:", e);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.post('/api/pedidos/nuevo', async (req, res) => {
+    // 1. Recibimos los datos que manda Flutter
+    const { cliente_id, total, items, sucursal_id } = req.body;
+    
+    // Generamos un folio de factura aleatorio (puedes cambiar esta lógica si prefieres consecutivos)
+    const invoice_no = Math.floor(Math.random() * 900000000) + 100000000;
+    
+    // Calculamos el total de piezas para la tabla cabecera
+    const totalQty = items.reduce((sum, item) => sum + parseInt(item.qty), 0);
+
+    const connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    try {
+        // ---------------------------------------------------------
+        // PASO 1: INSERTAR EN CABECERA (customer_orders)
+        // ---------------------------------------------------------
+        const sqlCabecera = `
+            INSERT INTO customer_orders 
+            (customer_id, due_amount, invoice_no, qty, order_date, order_status) 
+            VALUES (?, ?, ?, ?, NOW(), 'pending')
+        `;
+        
+        await connection.execute(sqlCabecera, [
+            cliente_id, 
+            total,       // due_amount
+            invoice_no, 
+            totalQty     // qty global
+        ]);
+
+        // ---------------------------------------------------------
+        // PASO 2: INSERTAR DETALLES (pending_orders)
+        // ---------------------------------------------------------
+        for (const item of items) {
+            // Aseguramos que num_suc venga, si no, usamos el general
+            const itemSucursal = item.num_suc || sucursal_id || 1;
+
+            const sqlDetalle = `
+                INSERT INTO pending_orders 
+                (customer_id, invoice_no, product_id, qty, order_status, p_price, num_suc) 
+                VALUES (?, ?, ?, ?, 'pending', ?, ?)
+            `;
+            
+            await connection.execute(sqlDetalle, [
+                cliente_id,
+                invoice_no,
+                item.p_id,         // product_id (VARCHAR según tu tabla)
+                item.qty,          // qty individual
+                item.p_price,      // p_price (DECIMAL)
+                itemSucursal       // num_suc (Vital para saber de qué almacén restar)
+            ]);
+
+            // ---------------------------------------------------------
+            // PASO 3 (OPCIONAL): DESCONTAR STOCK INMEDIATAMENTE
+            // ---------------------------------------------------------
+            // Si quieres que el stock baje en cuanto dan click en "Confirmar", descomenta esto:
+            /*
+            await connection.execute(
+               `UPDATE alm${itemSucursal} SET ExisPVentas = ExisPVentas - ? WHERE Clave = ?`,
+               [item.qty, item.Clave] // Asegúrate de que Flutter mande 'Clave' en el objeto item
+            );
+            */
+        }
+
+        await connection.commit();
+
+        // ---------------------------------------------------------
+        // PASO 4: LIMPIAR EL CARRITO TEMPORAL
+        // ---------------------------------------------------------
+        await connection.execute("DELETE FROM carrito_compras WHERE ip_add = 'APP_USER'");
+
+        console.log(`✅ Pedido #${invoice_no} guardado correctamente.`);
+        
+        res.json({ success: true, id_pedido: invoice_no });
+
+    } catch (e) {
+        await connection.rollback();
+        console.error("❌ Error al guardar pedido:", e);
+        res.status(500).json({ success: false, message: "Error en el servidor al procesar el pedido." });
+    } finally {
+        connection.release();
     }
 });
 
