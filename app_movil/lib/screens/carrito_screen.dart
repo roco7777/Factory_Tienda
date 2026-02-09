@@ -2,14 +2,13 @@ import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart'; // <--- IMPORTANTE: Agrega esto
+
 import '../services/tienda_service.dart';
 import 'confirmacion_pedido_screen.dart';
 import 'login_screen.dart';
 import 'detalle_producto_screen.dart';
 import '../widgets/tienda_modals.dart';
-
-// IMPORTANTE: Asegúrate de importar aquí tu ficha de producto
-// import 'ficha_producto_helper.dart';
 
 class CarritoScreen extends StatefulWidget {
   final String baseUrl;
@@ -30,12 +29,10 @@ class _CarritoScreenState extends State<CarritoScreen> {
 
   int _obtenerMultiplo(dynamic item) {
     int m1 = (double.tryParse(item['Min1']?.toString() ?? '0') ?? 0).toInt();
-    // Si min1 es 0 o 1, el múltiplo es 1 (venta libre). Si es > 1, ese es el múltiplo.
     return m1 <= 1 ? 1 : m1;
   }
 
   double _calcularPrecioSegunEscala(dynamic item, int cantidad) {
-    // Extraemos los precios y mínimos del item (vienen de tu JOIN en el ProLiant)
     double p1 = double.tryParse(item['Precio1']?.toString() ?? '0') ?? 0;
     double p2 = double.tryParse(item['Precio2']?.toString() ?? '0') ?? 0;
     double p3 = double.tryParse(item['Precio3']?.toString() ?? '0') ?? 0;
@@ -43,7 +40,6 @@ class _CarritoScreenState extends State<CarritoScreen> {
     int m2 = (double.tryParse(item['Min2']?.toString() ?? '0') ?? 0).toInt();
     int m3 = (double.tryParse(item['Min3']?.toString() ?? '0') ?? 0).toInt();
 
-    // Lógica de escala: de mayor a menor
     if (p3 > 0 && m3 > 0 && cantidad >= m3) return p3;
     if (p2 > 0 && m2 > 0 && cantidad >= m2) return p2;
     return p1;
@@ -64,12 +60,12 @@ class _CarritoScreenState extends State<CarritoScreen> {
         Uri.parse('${widget.baseUrl}/api/carrito?ip_add=APP_USER'),
       );
       if (res.statusCode == 200) {
+        if (!mounted) return;
         setState(() {
           items = json.decode(res.body);
           if (items.isNotEmpty) {
             nombreSucursal =
                 items[0]['NombreSucursal'] ?? "Sucursal Seleccionada";
-            // --- NUEVA LÓGICA DE CAPTURA ---
             permitePedidos =
                 (int.tryParse(items[0]['permite_pedidos']?.toString() ?? '1') ??
                     1) ==
@@ -79,14 +75,13 @@ class _CarritoScreenState extends State<CarritoScreen> {
                   items[0]['minimo_sucursal']?.toString() ?? '0',
                 ) ??
                 0;
-            // ------------------------------
           }
         });
       }
     } catch (e) {
       debugPrint("Error obteniendo carrito: $e");
     } finally {
-      setState(() => cargando = false);
+      if (mounted) setState(() => cargando = false);
     }
   }
 
@@ -169,39 +164,33 @@ class _CarritoScreenState extends State<CarritoScreen> {
       setState(() => cargando = false);
 
       if (respuesta['status'] == 'ok') {
-        // En lugar de ir directo a finalizar, vamos al RESUMEN
+        if (!mounted) return;
         Navigator.push(
           context,
           MaterialPageRoute(
             builder: (context) => ConfirmacionPedidoScreen(
               baseUrl: widget.baseUrl,
-              items: items, // Pasamos la lista de productos
-              total: _calcularTotal(), // Pasamos el total calculado
-              // Aquí pasamos la función que realmente guarda en la DB
+              items: items,
+              total: _calcularTotal(),
+              // --- AQUÍ CONECTAMOS CON LA FUNCIÓN REAL ---
               onConfirmar: () {
-                // Cerramos la pantalla de confirmación
-                Navigator.pop(context);
-                // Y ejecutamos el proceso final
+                // NO cerramos con pop. Llamamos directo a la función.
                 _finalizarPedido();
               },
             ),
           ),
         );
       } else {
-        // --- AQUÍ ESTÁ EL ARREGLO ---
         setState(() {
           for (var error in respuesta['detalles']) {
-            // Buscamos el item en nuestra lista local
             final item = items.firstWhere(
               (i) => i['Descripcion'] == error['nombre'],
+              orElse: () => null,
             );
-
-            // 1. Guardamos el error para que la tarjeta sepa que debe pintar
-            erroresStock[item['p_id']] = error;
-
-            // 2. ¡VITAL! Actualizamos el stock local con lo que dijo el servidor
-            // Sin esta línea, la UI no sabe que qty > stock y no cambia de color
-            item['stock_disponible'] = error['disponible'];
+            if (item != null) {
+              erroresStock[item['p_id']] = error;
+              item['stock_disponible'] = error['disponible'];
+            }
           }
         });
 
@@ -217,6 +206,159 @@ class _CarritoScreenState extends State<CarritoScreen> {
       debugPrint("Error verificación: $e");
     }
   }
+
+  // --- AQUÍ ESTÁ LA LÓGICA QUE FALTABA ---
+  Future<void> _finalizarPedido() async {
+    debugPrint("🚀 INICIANDO PROCESO DE PEDIDO...");
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const Center(child: CircularProgressIndicator()),
+    );
+
+    final prefs = await SharedPreferences.getInstance();
+
+    String cId = prefs.get('cliente_id')?.toString() ?? "0";
+    String sId = prefs.get('saved_sucursal_id')?.toString() ?? "1";
+
+    // Convertimos a números limpios para la base de datos
+    int clienteId = double.tryParse(cId)?.toInt() ?? 0;
+    int sucursalId = double.tryParse(sId)?.toInt() ?? 1;
+    double total = _calcularTotal();
+
+    debugPrint(
+      "📊 Datos listos: Cliente: $clienteId, Sucursal: $sucursalId, Total: $total",
+    );
+
+    try {
+      // Preparamos los items
+      final List<Map<String, dynamic>> itemsParaServer = items.map((item) {
+        return {
+          "p_id": item['p_id'],
+          "qty": item['qty'],
+          "p_price": item['p_price'],
+          "num_suc": item['num_suc'] ?? sucursalId,
+        };
+      }).toList();
+
+      final cuerpoJson = jsonEncode({
+        "cliente_id": clienteId,
+        "sucursal_id": sucursalId,
+        "total": total,
+        "items": itemsParaServer,
+      });
+
+      // Enviamos con timeout de 10 segundos
+      final response = await http
+          .post(
+            Uri.parse('${widget.baseUrl}/api/pedidos/nuevo'),
+            headers: {"Content-Type": "application/json"},
+            body: cuerpoJson,
+          )
+          .timeout(const Duration(seconds: 10));
+
+      debugPrint("📨 Respuesta Servidor: ${response.body}");
+
+      // Cerramos el "Cargando"
+      if (mounted) Navigator.pop(context);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['success'] == true) {
+          final String folio = data['id_pedido'].toString();
+          final String whatsapp = data['whatsapp']?.toString() ?? "";
+
+          if (mounted) _mostrarExitoYWhatsApp(folio, whatsapp);
+
+          setState(() {
+            items.clear();
+            erroresStock.clear();
+          });
+        } else {
+          _mostrarError("Servidor rechazó: ${data['message']}");
+        }
+      } else {
+        _mostrarError("Error del servidor (${response.statusCode})");
+      }
+    } catch (e) {
+      debugPrint("❌ ERROR CRÍTICO: $e");
+      if (mounted) Navigator.pop(context); // Cierra cargando
+      _mostrarError("Error: $e");
+    }
+  }
+
+  void _mostrarExitoYWhatsApp(String folio, String telefono) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Column(
+          children: [
+            Icon(Icons.check_circle, color: Colors.green, size: 60),
+            SizedBox(height: 10),
+            Text("¡Pedido Exitoso!", textAlign: TextAlign.center),
+          ],
+        ),
+        content: Text(
+          "Tu pedido se guardó con el Folio #$folio.\n\nSe abrirá WhatsApp para enviar tu pedido a la sucursal.",
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 16),
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green[700],
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            onPressed: () {
+              // Cerramos el diálogo de éxito
+              Navigator.pop(ctx);
+              // Cerramos la pantalla de Confirmación (volvemos al Carrito vacío)
+              Navigator.pop(context);
+
+              // Abrimos WhatsApp
+              _abrirWhatsApp(telefono, folio);
+            },
+            child: const Text(
+              "IR A WHATSAPP",
+              style: TextStyle(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _abrirWhatsApp(String telefono, String folio) async {
+    if (telefono.isEmpty || telefono.length < 5) {
+      _mostrarError("La sucursal no tiene número de WhatsApp registrado.");
+      return;
+    }
+
+    String telefonoLimpio = telefono.replaceAll(RegExp(r'[^0-9]'), '');
+    String mensaje = "Hola, acabo de realizar el pedido #$folio desde la App.";
+    final Uri url = Uri.parse(
+      "https://wa.me/$telefonoLimpio?text=${Uri.encodeComponent(mensaje)}",
+    );
+
+    try {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    } catch (e) {
+      _mostrarError("No se pudo abrir WhatsApp");
+    }
+  }
+
+  void _mostrarError(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+  }
+  // ------------------------------------------
 
   void _mostrarDialogoCantidadManual(dynamic item) {
     TextEditingController customQtyController = TextEditingController();
@@ -266,10 +408,8 @@ class _CarritoScreenState extends State<CarritoScreen> {
             ),
             onPressed: () {
               int? cant = int.tryParse(customQtyController.text);
-
               if (cant == null || cant <= 0) return;
 
-              // VALIDACIÓN MATEMÁTICA DEL MÚLTIPLO
               if (cant % multiplo != 0) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
@@ -301,20 +441,15 @@ class _CarritoScreenState extends State<CarritoScreen> {
   }
 
   void _procesarCambioCantidad(dynamic item, int nuevaCantidad) async {
-    // 1. Calculamos el nuevo precio basado en la escala
     double nuevoPrecio = _calcularPrecioSegunEscala(item, nuevaCantidad);
-
-    // --- MEJORA ESTRUCTURAL: Respuesta instantánea ---
     setState(() {
-      item['qty'] = nuevaCantidad; // Actualizamos cantidad localmente
-      item['p_price'] = nuevoPrecio; // Actualizamos precio localmente
-      erroresStock.remove(
-        item['p_id'],
-      ); // ¡Quitamos el color naranja de inmediato!
+      item['qty'] = nuevaCantidad;
+      item['p_price'] = nuevoPrecio;
+      erroresStock.remove(item['p_id']);
     });
 
     try {
-      final res = await http.post(
+      await http.post(
         Uri.parse('${widget.baseUrl}/api/agregar_carrito'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -326,8 +461,6 @@ class _CarritoScreenState extends State<CarritoScreen> {
           'is_increment': false,
         }),
       );
-      // Solo refrescamos si hubo éxito, pero la UI ya se ve bien desde el setState de arriba
-      //if (res.statusCode == 200) _obtenerCarrito();
     } catch (e) {
       debugPrint("Error actualizando cantidad: $e");
     }
@@ -352,20 +485,16 @@ class _CarritoScreenState extends State<CarritoScreen> {
               backgroundColor: const Color(0xFFD32F2F),
             ),
             onPressed: () async {
-              Navigator.pop(context); // Cerramos el diálogo
+              Navigator.pop(context);
               setState(() => cargando = true);
-
               try {
-                // Llamamos al servicio para vaciar la tabla en MariaDB
                 await TiendaService.vaciarCarrito(widget.baseUrl);
-
                 if (mounted) {
                   setState(() {
                     items = [];
                     erroresStock.clear();
                     cargando = false;
                   });
-
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text("Carrito vaciado correctamente"),
@@ -393,11 +522,8 @@ class _CarritoScreenState extends State<CarritoScreen> {
           item: item,
           baseUrl: widget.baseUrl,
           onAgregarTap: (itemParaAgregar) {
-            // Si le pican a 'Agregar' desde el detalle,
-            // sumamos 1 a la cantidad actual del carrito
             int currentQty = (int.tryParse(item['qty'].toString()) ?? 1);
             _actualizarCantidad(item, currentQty + 1);
-
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
                 content: Text("Cantidad actualizada en el carrito"),
@@ -411,7 +537,6 @@ class _CarritoScreenState extends State<CarritoScreen> {
 
   Future<void> _abrirSelectorConStockReal(dynamic item) async {
     try {
-      // 1. Verificamos que tengamos los IDs necesarios
       final pId = item['p_id'];
       final nSuc = item['num_suc'];
 
@@ -423,17 +548,10 @@ class _CarritoScreenState extends State<CarritoScreen> {
 
       if (response.statusCode == 200) {
         final stockFresco = json.decode(response.body);
-
-        // LOG DE SEGURIDAD: Revisa esto en tu terminal de VS Code
-        debugPrint("Respuesta Servidor para ID $pId: $stockFresco");
-
         if (mounted) {
           setState(() {
-            // 2. Inyectamos la "verdad" del servidor en el item
             item['stock_disponible'] = stockFresco['stock_disponible'];
             item['Min1'] = stockFresco['Min1'];
-
-            // Aprovechamos para limpiar el error si el stock ahora es suficiente
             int qtyActual = (int.tryParse(item['qty'].toString()) ?? 0);
             int stockReal =
                 (double.tryParse(stockFresco['stock_disponible'].toString()) ??
@@ -444,7 +562,6 @@ class _CarritoScreenState extends State<CarritoScreen> {
             }
           });
 
-          // 3. Abrimos el modal pasando el objeto YA actualizado
           TiendaModals.mostrarSelectorCantidad(
             context: context,
             item: item,
@@ -459,21 +576,8 @@ class _CarritoScreenState extends State<CarritoScreen> {
       }
     } catch (e) {
       debugPrint("Error crítico de sincronización: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Error al conectar con el servidor HP ProLiant"),
-        ),
-      );
     }
   }
-
-  Future<void> _finalizarPedido() async {
-    // Aquí va tu lógica original de guardado en DB y envío de WhatsApp
-    debugPrint("Procesando pedido final...");
-    // ... resto de tu código de WhatsApp ...
-  }
-
-  // --- INTERFAZ (BUILD) ---
 
   @override
   Widget build(BuildContext context) {
@@ -516,15 +620,14 @@ class _CarritoScreenState extends State<CarritoScreen> {
                         onUpdate: _actualizarCantidad,
                         onDelete: _eliminarItem,
                         onShowFicha: _abrirFichaDetalle,
-                        onSelectQty:
-                            _abrirSelectorConStockReal, // <--- CAMBIA ESTO (Antes decía _mostrarSelectorCantidad)
+                        onSelectQty: _abrirSelectorConStockReal,
                       ),
                     ),
                   ),
                   _ResumenCompra(
                     total: _calcularTotal(),
-                    minCompra: minCompra, // <--- Agregar
-                    permitePedidos: permitePedidos, // <--- Agregar
+                    minCompra: minCompra,
+                    permitePedidos: permitePedidos,
                     onPressed: _verificarYContinuar,
                   ),
                 ],
@@ -534,7 +637,10 @@ class _CarritoScreenState extends State<CarritoScreen> {
   }
 }
 
-// 1. Cabecera de Sucursal
+// ----------------------------------------------------
+// WIDGETS AUXILIARES (Sin cambios mayores, solo visuales)
+// ----------------------------------------------------
+
 class _CabeceraSucursal extends StatelessWidget {
   final String nombre;
   const _CabeceraSucursal({required this.nombre});
@@ -559,7 +665,6 @@ class _CabeceraSucursal extends StatelessWidget {
   }
 }
 
-// 2. La Tarjeta de cada Producto (Aquí está la lógica visual de errores)
 class _TarjetaProducto extends StatelessWidget {
   final dynamic item;
   final String baseUrl;
@@ -583,20 +688,14 @@ class _TarjetaProducto extends StatelessWidget {
   Widget build(BuildContext context) {
     int qty = (double.tryParse(item['qty']?.toString() ?? '1') ?? 1).toInt();
     double precio = double.tryParse(item['p_price']?.toString() ?? '0') ?? 0;
-
-    // Stock sin decimales y texto pulido
     int stockDisponible =
         (double.tryParse(item['stock_disponible']?.toString() ?? '0') ?? 0)
             .toInt();
-
     bool esAgotado = error != null && stockDisponible <= 0;
-    // Error si la cantidad actual supera el stock reportado por el servidor
     bool mostrarError = error != null && qty > stockDisponible && !esAgotado;
 
     return Opacity(
-      opacity: esAgotado
-          ? 0.6
-          : 1.0, // Un poco menos traslúcido para que sea legible
+      opacity: esAgotado ? 0.6 : 1.0,
       child: Card(
         margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         color: esAgotado
@@ -617,7 +716,6 @@ class _TarjetaProducto extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // Imagen del producto
               IgnorePointer(
                 ignoring: esAgotado,
                 child: GestureDetector(
@@ -636,8 +734,6 @@ class _TarjetaProducto extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 12),
-
-              // Información del producto
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -652,8 +748,6 @@ class _TarjetaProducto extends StatelessWidget {
                         color: esAgotado ? Colors.grey[700] : Colors.black87,
                       ),
                     ),
-
-                    // Mensaje de Advertencia (Naranja - Stock Insuficiente)
                     if (mostrarError)
                       Padding(
                         padding: const EdgeInsets.only(top: 4),
@@ -666,8 +760,6 @@ class _TarjetaProducto extends StatelessWidget {
                           ),
                         ),
                       ),
-
-                    // Mensaje Critico (Rojo - Agotado)
                     if (esAgotado)
                       const Padding(
                         padding: EdgeInsets.only(top: 4),
@@ -680,10 +772,7 @@ class _TarjetaProducto extends StatelessWidget {
                           ),
                         ),
                       ),
-
                     const SizedBox(height: 10),
-
-                    // Fila de Precios y Cantidad
                     Row(
                       children: [
                         Text(
@@ -694,10 +783,7 @@ class _TarjetaProducto extends StatelessWidget {
                           ),
                         ),
                         const Text(" x ", style: TextStyle(color: Colors.grey)),
-
-                        // Selector de Cantidad
                         InkWell(
-                          // Si está agotado, el botón no reacciona
                           onTap: esAgotado ? null : () => onSelectQty(item),
                           child: Container(
                             padding: const EdgeInsets.symmetric(
@@ -730,7 +816,6 @@ class _TarjetaProducto extends StatelessWidget {
                                         : Colors.black,
                                   ),
                                 ),
-                                // Solo mostramos la flecha si NO está agotado
                                 if (!esAgotado)
                                   const Icon(Icons.arrow_drop_down, size: 18),
                               ],
@@ -738,8 +823,6 @@ class _TarjetaProducto extends StatelessWidget {
                           ),
                         ),
                         const Spacer(),
-
-                        // Subtotal del Item
                         Text(
                           "\$${(precio * qty).toStringAsFixed(2)}",
                           style: TextStyle(
@@ -748,7 +831,6 @@ class _TarjetaProducto extends StatelessWidget {
                             color: esAgotado
                                 ? Colors.grey
                                 : const Color(0xFFD32F2F),
-                            // Si está agotado, tachamos el precio para indicar que no suma
                             decoration: esAgotado
                                 ? TextDecoration.lineThrough
                                 : null,
@@ -759,8 +841,6 @@ class _TarjetaProducto extends StatelessWidget {
                   ],
                 ),
               ),
-
-              // Botón eliminar
               IconButton(
                 icon: const Icon(
                   Icons.delete_outline,
@@ -777,7 +857,6 @@ class _TarjetaProducto extends StatelessWidget {
   }
 }
 
-// 3. Resumen Final de Compra (Total y Botón)
 class _ResumenCompra extends StatelessWidget {
   final double total;
   final double minCompra;

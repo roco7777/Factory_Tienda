@@ -123,7 +123,11 @@ app.post('/api/producto/upload-foto', upload.single('foto'), async (req, res) =>
                 withoutEnlargement: true, 
                 fit: 'inside'
             })
-            .jpeg({ quality: 80, mozjpeg: true }) // Calidad 80% es perfecta para móvil
+            .jpeg({ 
+                quality: 80, 
+                progressive: True,       // <--- OBLIGATORIO: 'false' para que sea Baseline (Estándar)
+                mozjpeg: True,           // <--- Desactivamos optimizaciones modernas
+            })// Calidad 80% es perfecta para móvil
             .toFile(rutaFinal);
 
         // 3. LIMPIEZA: Borrar el archivo pesado original
@@ -1307,86 +1311,130 @@ app.post('/api/usuarios/eliminar', async (req, res) => {
 });
 
 app.post('/api/pedidos/nuevo', async (req, res) => {
+    console.log("---------------");
+    console.log("📥 ¡PETICIÓN DE PEDIDO RECIBIDA!");
+    console.log("Datos:", req.body);
+    console.log("---------------");
     // 1. Recibimos los datos que manda Flutter
     const { cliente_id, total, items, sucursal_id } = req.body;
     
-    // Generamos un folio de factura aleatorio (puedes cambiar esta lógica si prefieres consecutivos)
+    // Generamos folio aleatorio
     const invoice_no = Math.floor(Math.random() * 900000000) + 100000000;
     
-    // Calculamos el total de piezas para la tabla cabecera
+    // Calculamos total piezas
     const totalQty = items.reduce((sum, item) => sum + parseInt(item.qty), 0);
 
     const connection = await db.getConnection();
     await connection.beginTransaction();
 
     try {
-        // ---------------------------------------------------------
-        // PASO 1: INSERTAR EN CABECERA (customer_orders)
-        // ---------------------------------------------------------
+        // --- A. INSERTAR EN CABECERA ---
         const sqlCabecera = `
             INSERT INTO customer_orders 
             (customer_id, due_amount, invoice_no, qty, order_date, order_status) 
-            VALUES (?, ?, ?, ?, NOW(), 'pending')
+            VALUES (?, ?, ?, ?, NOW(), 'PENDIENTE')
         `;
         
         await connection.execute(sqlCabecera, [
             cliente_id, 
-            total,       // due_amount
+            total, 
             invoice_no, 
-            totalQty     // qty global
+            totalQty
         ]);
 
-        // ---------------------------------------------------------
-        // PASO 2: INSERTAR DETALLES (pending_orders)
-        // ---------------------------------------------------------
+        // --- B. INSERTAR DETALLES ---
         for (const item of items) {
-            // Aseguramos que num_suc venga, si no, usamos el general
+            // Nota: Aquí validamos que venga item.num_suc, si no, usamos el general
             const itemSucursal = item.num_suc || sucursal_id || 1;
 
             const sqlDetalle = `
                 INSERT INTO pending_orders 
-                (customer_id, invoice_no, product_id, qty, order_status, p_price, num_suc) 
-                VALUES (?, ?, ?, ?, 'pending', ?, ?)
+                (customer_id, invoice_no, product_id, qty, order_status, p_price, num_suc, order_date) 
+                VALUES (?, ?, ?, ?, 'pending', ?, ?, NOW())
             `;
+            // Agregué order_date al insert del detalle también por si acaso
             
             await connection.execute(sqlDetalle, [
                 cliente_id,
                 invoice_no,
-                item.p_id,         // product_id (VARCHAR según tu tabla)
-                item.qty,          // qty individual
-                item.p_price,      // p_price (DECIMAL)
-                itemSucursal       // num_suc (Vital para saber de qué almacén restar)
+                item.p_id,       // <--- OJO: Flutter debe mandar 'p_id' (Clave)
+                item.qty,
+                item.p_price,
+                itemSucursal
             ]);
+        }
 
-            // ---------------------------------------------------------
-            // PASO 3 (OPCIONAL): DESCONTAR STOCK INMEDIATAMENTE
-            // ---------------------------------------------------------
-            // Si quieres que el stock baje en cuanto dan click en "Confirmar", descomenta esto:
-            /*
-            await connection.execute(
-               `UPDATE alm${itemSucursal} SET ExisPVentas = ExisPVentas - ? WHERE Clave = ?`,
-               [item.qty, item.Clave] // Asegúrate de que Flutter mande 'Clave' en el objeto item
-            );
-            */
+        // --- C. OBTENER WHATSAPP (¡LO NUEVO!) ---
+        // Consultamos el teléfono de la sucursal para devolverlo a la App
+        const [sucursalRows] = await connection.execute(
+            'SELECT TelefonoWhatsapp, Sucursal FROM empresa WHERE Id = ?', 
+            [sucursal_id]
+        );
+        
+        let whatsappDestino = '';
+        let nombreSucursal = '';
+
+        if (sucursalRows.length > 0) {
+            whatsappDestino = sucursalRows[0].TelefonoWhatsapp;
+            nombreSucursal = sucursalRows[0].Sucursal;
         }
 
         await connection.commit();
 
-        // ---------------------------------------------------------
-        // PASO 4: LIMPIAR EL CARRITO TEMPORAL
-        // ---------------------------------------------------------
-        await connection.execute("DELETE FROM carrito_compras WHERE ip_add = 'APP_USER'");
-
-        console.log(`✅ Pedido #${invoice_no} guardado correctamente.`);
+        console.log(`✅ Pedido #${invoice_no} guardado. Sucursal: ${nombreSucursal}`);
         
-        res.json({ success: true, id_pedido: invoice_no });
+        // --- D. RESPONDER A FLUTTER ---
+        res.json({ 
+            success: true, 
+            id_pedido: invoice_no,
+            whatsapp: whatsappDestino, // <--- Enviamos el dato a la App
+            sucursal: nombreSucursal
+        });
 
     } catch (e) {
         await connection.rollback();
         console.error("❌ Error al guardar pedido:", e);
-        res.status(500).json({ success: false, message: "Error en el servidor al procesar el pedido." });
+        res.status(500).json({ success: false, message: "Error al procesar el pedido." });
     } finally {
         connection.release();
+    }
+});
+
+// OBTENER HISTORIAL (Versión DEFINITIVA y OPTIMIZADA)
+app.get('/api/historial/:clienteId', async (req, res) => {
+    const { clienteId } = req.params;
+
+    try {
+        // Consulta directa a la tabla de encabezados
+        // Súper rápida gracias al índice idx_mov_cliente
+        const query = `
+            SELECT 
+                Id AS ticket_id,
+                Folio AS folio_ticket,
+                DATE_FORMAT(Fecha, '%Y-%m-%d') as fecha,
+                Hora as hora,
+                Total AS total_pagado,
+                pedidoweb AS referencia_web,
+                CASE 
+                    WHEN Tarjeta > 0 THEN 'Tarjeta'
+                    WHEN Cheque > 0 THEN 'Cheque'
+                    WHEN Credito > 0 THEN 'Crédito'
+                    ELSE 'Efectivo'
+                END AS metodo_pago,
+                Estatus -- Si agregaste campo de estatus, o asumimos 'Entregado'
+            FROM movimientos
+            WHERE NoCliente = ?
+            ORDER BY Fecha DESC, Hora DESC
+            LIMIT 50
+        `;
+
+        const [historial] = await db.execute(query, [clienteId]);
+        
+        res.json({ success: true, data: historial });
+
+    } catch (error) {
+        console.error("Error historial:", error);
+        res.status(500).json({ success: false, message: 'Error al obtener historial' });
     }
 });
 
