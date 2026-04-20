@@ -3,7 +3,9 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'registro_screen.dart';
-import 'tienda_screen.dart'; // <--- CORRECCIÓN 1: Importamos la tienda
+import 'tienda_screen.dart';
+
+bool _verPassword = false; // Por defecto la contraseña está oculta
 
 class LoginScreen extends StatefulWidget {
   final String baseUrl;
@@ -20,7 +22,6 @@ class _LoginScreenState extends State<LoginScreen> {
   final Color rojoFactory = const Color(0xFFD32F2F);
 
   Future<void> _login() async {
-    // Validación básica de campos vacíos
     if (_telController.text.trim().isEmpty ||
         _passController.text.trim().isEmpty) {
       _mostrarError("Por favor, llena todos los campos");
@@ -37,32 +38,22 @@ class _LoginScreenState extends State<LoginScreen> {
           'password': _passController.text.trim(),
         }),
       );
-      debugPrint("Código de estado: ${response.statusCode}");
-      debugPrint(
-        "Cuerpo enviado: ${json.encode({'telefono': _telController.text.trim(), 'password': _passController.text.trim()})}",
-      );
-      debugPrint("Respuesta del servidor: ${response.body}");
+
       final data = json.decode(response.body);
 
       if (response.statusCode == 200 && data['success'] == true) {
         final prefs = await SharedPreferences.getInstance();
-
-        // Guardamos los datos del cliente
         await prefs.setString('cliente_id', data['cliente']['Id'].toString());
         await prefs.setString(
           'cliente_nombre',
           data['cliente']['Nombre2'] ?? "Cliente",
         );
-
-        // Manejamos el teléfono por si viene nulo
         await prefs.setString(
           'cliente_telefono',
           data['cliente']['Telefono'] ?? _telController.text.trim(),
         );
 
         if (!mounted) return;
-
-        // Navegamos a la tienda y borramos el historial para que no puedan regresar al login con el botón atrás
         Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(
@@ -80,7 +71,6 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  // CORRECCIÓN 2: Unificamos el nombre de la función de error
   void _mostrarError(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -118,25 +108,66 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ),
             const SizedBox(height: 20),
-            TextField(
+            TextFormField(
               controller: _passController,
-              obscureText: true,
+              obscureText:
+                  !_verPassword, // Si _verPassword es falso, oculta el texto
               decoration: InputDecoration(
                 labelText: "Contraseña",
                 prefixIcon: const Icon(Icons.lock),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
+                border: const OutlineInputBorder(),
+                // --- AQUÍ AGREGAMOS EL OJITO ---
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _verPassword ? Icons.visibility : Icons.visibility_off,
+                    color: Colors.grey,
+                  ),
+                  onPressed: () {
+                    // Al presionar, cambiamos el estado y Flutter redibuja el campo
+                    setState(() {
+                      _verPassword = !_verPassword;
+                    });
+                  },
+                ),
+              ),
+              validator: (value) {
+                if (value == null || value.isEmpty)
+                  return "Ingresa tu contraseña";
+                return null;
+              },
+            ),
+
+            // --- NUEVO: BOTÓN OLVIDÉ MI CONTRASEÑA ---
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => RegistroScreen(
+                        baseUrl: widget.baseUrl,
+                        esRecuperacion:
+                            true, // Avisamos que es para recuperar clave
+                      ),
+                    ),
+                  );
+                },
+                child: const Text(
+                  "¿Olvidaste tu contraseña?",
+                  style: TextStyle(color: Colors.grey),
                 ),
               ),
             ),
-            const SizedBox(height: 30),
+
+            const SizedBox(height: 10),
             _isLoading
                 ? const CircularProgressIndicator()
                 : SizedBox(
                     width: double.infinity,
                     height: 50,
                     child: ElevatedButton(
-                      onPressed: _login, // Llamamos a la función _login
+                      onPressed: _login,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: rojoFactory,
                         shape: RoundedRectangleBorder(
@@ -159,8 +190,10 @@ class _LoginScreenState extends State<LoginScreen> {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) =>
-                        RegistroScreen(baseUrl: widget.baseUrl),
+                    builder: (context) => RegistroScreen(
+                      baseUrl: widget.baseUrl,
+                      esRecuperacion: false,
+                    ),
                   ),
                 );
               },

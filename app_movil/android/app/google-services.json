@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1057526336351",
+    "project_id": "factory-tienda",
+    "storage_bucket": "factory-tienda.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1057526336351:android:9cc3e294da6f6c91f344ea",
+        "android_client_info": {
+          "package_name": "com.factory.tienda"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBqEpEbg9PG3FmMraxtZq0izSe_gCWasTc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

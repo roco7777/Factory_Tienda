@@ -269,12 +269,23 @@ class _CarritoScreenState extends State<CarritoScreen> {
           final String folio = data['id_pedido'].toString();
           final String whatsapp = data['whatsapp']?.toString() ?? "";
 
-          if (mounted) _mostrarExitoYWhatsApp(folio, whatsapp);
+          // --- EL ARREGLO FANTASMA ESTÁ AQUÍ ---
+          // 1. Limpiamos el carrito REAL en la Base de Datos (Servidor)
+          try {
+            await TiendaService.vaciarCarrito(widget.baseUrl);
+          } catch (e) {
+            debugPrint("Error silencioso al vaciar DB: $e");
+          }
 
+          // 2. Limpiamos la Pantalla (Local)
           setState(() {
             items.clear();
             erroresStock.clear();
           });
+
+          // 3. Disparamos la alerta y el WhatsApp
+          if (mounted) _mostrarExitoYWhatsApp(folio, whatsapp);
+          // ------------------------------------
         } else {
           _mostrarError("Servidor rechazó: ${data['message']}");
         }

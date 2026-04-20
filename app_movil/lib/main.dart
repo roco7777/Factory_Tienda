@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart'; // <--- NUEVO
+import 'firebase_options.dart'; // <--- NUEVO (el archivo que se acaba de generar)
 import 'package:shared_preferences/shared_preferences.dart';
 import 'core/constants.dart';
 import 'screens/tienda_screen.dart';
@@ -7,6 +9,8 @@ import 'package:factory_tienda/services/tienda_service.dart';
 void main() async {
   // 1. Inicialización necesaria para usar SharedPreferences antes del runApp
   WidgetsFlutterBinding.ensureInitialized();
+
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
   // 2. Leemos la URL guardada en la memoria del teléfono
   final prefs = await SharedPreferences.getInstance();

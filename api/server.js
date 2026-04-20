@@ -927,7 +927,7 @@ app.post('/api/abmc/producto/:clave', async (req, res) => {
     const p2 = parseFloat(b.Precio2) || 0;
     const p3 = parseFloat(b.Precio3) || 0;
 
-    // Mantenemos tus cálculos de valores originales
+    // Calculamos utilidades
     const v = [
         calcularValores(p1, costo), 
         calcularValores(p2, costo), 
@@ -939,16 +939,18 @@ app.post('/api/abmc/producto/:clave', async (req, res) => {
         conn = await db.getConnection(); 
         await conn.beginTransaction(); 
         
-        // El SQL se mantiene igual, es correcto.
-        const sqlUpdate = `UPDATE PRODUCTOS SET 
-            Descripcion=?, CB=?, ClavePro=?, PCosto=?, PCostoImp=?, PzasxCaja=?, Tipo=?, 
+        // UPDATE con los nombres exactos de las columnas en tu MariaDB
+        const sqlUpdate = `UPDATE productos SET 
+            Descripcion=?, Presentacion=?, CB=?, ClavePro=?, PCosto=?, PCostoImp=?, PzasxCaja=?, Tipo=?, 
             Precio1=?, Precio2=?, Precio3=?, 
             Min1=?, Min2=?, Min3=?, 
-            Util1=?, PorUtil1=?, Util2=?, PorUtil2=?, Util3=?, PorUtil3=? 
+            Util1=?, PorUtil1=?, Util2=?, PorUtil2=?, Util3=?, PorUtil3=?,
+            Activo=?, status=?, pendiente=?, LotePend=?
             WHERE Clave=?`;
 
         await conn.execute(sqlUpdate, [ 
             (b.Descripcion || '').toUpperCase(), 
+            b.Presentacion || '',              
             b.CB || req.params.clave, 
             b.ClavePro || '',         
             costo, 
@@ -964,13 +966,17 @@ app.post('/api/abmc/producto/:clave', async (req, res) => {
             v[0].utilidad, v[0].porutil, 
             v[1].utilidad, v[1].porutil, 
             v[2].utilidad, v[2].porutil, 
+            b.Activo !== undefined ? b.Activo : 1,          // Activo
+            b.Status !== undefined ? b.Status : 1,          // status (minúscula en DB)
+            b.Pendiente !== undefined ? b.Pendiente : 0,    // pendiente (minúscula en DB)
+            b.LotePend || null,                             // LotePend
             req.params.clave 
         ]); 
 
+        // Actualización de stocks en almacenes
         if (b.stocks) { 
             for (let i = 1; i <= 5; i++) { 
                 const s = b.stocks[`alm${i}`]; 
-                // Cambiamos el UPDATE de stock para ser más robustos con los valores recibidos
                 if (s) {
                     await conn.execute(
                         `UPDATE alm${i} SET ExisPVentas=?, ExisBodega=?, ACTIVO=? WHERE Clave=?`, 
@@ -984,11 +990,13 @@ app.post('/api/abmc/producto/:clave', async (req, res) => {
                 }
             } 
         } 
+        
         await conn.commit(); 
         res.json({ success: true }); 
+        
     } catch (e) { 
         if (conn) await conn.rollback(); 
-        console.error("Error en Update:", e.message);
+        console.error("Error en Update de Producto:", e.message);
         res.status(500).json({ success: false, error: e.message }); 
     } finally { 
         if (conn) conn.release(); 
@@ -1002,70 +1010,238 @@ app.get('/api/siguiente-cb', async (req, res) => {
     } catch (e) { res.status(500).send(e.message); }
 });
 
+
+// ==========================================
+// FLUJO DE REGISTRO SEGURO (CON FIREBASE OTP)
+// ==========================================
+
+// 1. Verificar si el número ya existe y su estado
+// 1. Verificar si el número ya existe y retornar sus datos para auto-llenado
+app.post('/api/cliente/verificar-numero', async (req, res) => {
+    let { telefono } = req.body;
+    
+    if (!telefono) {
+        return res.status(400).json({ success: false, message: "El teléfono es requerido." });
+    }
+
+    try {
+        // Limpiamos el teléfono por si llega con basura
+        telefono = telefono.toString().replace(/\D/g, '');
+
+        // Pedimos todos los campos necesarios para la App
+        const query = `
+            SELECT Id, Password, Nombre2, email, Calle, Barrio, CP, Ciudad, Estado 
+            FROM clientes 
+            WHERE Cel = ?`;
+            
+        const [rows] = await db.execute(query, [telefono]);
+        
+        if (rows.length > 0) {
+            const cliente = rows[0];
+            
+            // Validamos si tiene contraseña (tu lógica original)
+            const tienePass = cliente.Password && cliente.Password.toString().trim() !== '';
+            
+            // Enviamos la respuesta COMPLETA
+            res.json({ 
+                success: true, 
+                existe: true, 
+                tienePassword: tienePass,
+                mensaje: tienePass 
+                    ? "Este número ya está registrado. Por favor, inicia sesión." 
+                    : "Este número ya es cliente de sucursal. Necesita crear una contraseña para la App.",
+                // Enviamos los datos para que Flutter rellene los campos
+                datos: {
+                    nombre: cliente.Nombre2 || '',
+                    email: cliente.email || '',
+                    calle: cliente.Calle || '',
+                    barrio: cliente.Barrio || '',
+                    cp: cliente.CP || '',
+                    ciudad: cliente.Ciudad || '',
+                    estado: cliente.Estado || ''
+                }
+            });
+        } else {
+            // El número no existe en la base de datos
+            res.json({ 
+                success: true, 
+                existe: false, 
+                tienePassword: false, 
+                mensaje: "Número disponible para registro." 
+            });
+        }
+    } catch (e) {
+        console.error("Error al verificar número:", e.message);
+        res.status(500).json({ 
+            success: false, 
+            error: "Error en el servidor", 
+            detalle: e.message 
+        });
+    }
+});
+
+// 2. Crear contraseña para cliente físico antiguo
+app.post('/api/cliente/crear-password', async (req, res) => {
+    const { telefono, password } = req.body;
+
+    if (!telefono || !password) {
+        return res.status(400).json({ success: false, message: "Teléfono y contraseña requeridos." });
+    }
+
+    try {
+        const [result] = await db.execute(
+            "UPDATE clientes SET Password = ? WHERE Cel = ? AND (Password IS NULL OR Password = '')", 
+            [password, telefono]
+        );
+
+        if (result.affectedRows > 0) {
+            res.json({ success: true, message: "Contraseña creada con éxito. Ya puedes iniciar sesión." });
+        } else {
+            res.status(400).json({ success: false, message: "No se pudo actualizar la contraseña." });
+        }
+    } catch (e) {
+        console.error("Error al crear contraseña:", e.message);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// 3. Restablecer contraseña (Olvidé mi contraseña)
+app.post('/api/cliente/reset-password', async (req, res) => {
+    const { telefono, nuevaPassword } = req.body;
+
+    if (!telefono || !nuevaPassword) {
+        return res.status(400).json({ success: false, message: "Teléfono y nueva contraseña requeridos." });
+    }
+
+    try {
+        const [result] = await db.execute(
+            "UPDATE clientes SET Password = ? WHERE Cel = ?", 
+            [nuevaPassword, telefono]
+        );
+
+        if (result.affectedRows > 0) {
+            res.json({ success: true, message: "Contraseña actualizada correctamente. Ya puedes iniciar sesión." });
+        } else {
+            res.status(400).json({ success: false, message: "No se pudo actualizar. El número no existe." });
+        }
+    } catch (e) {
+        console.error("Error al restablecer contraseña:", e.message);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// ==========================================
+// REGISTRO CON FUSIÓN Y DOBLE VALIDACIÓN
+// ==========================================
 app.post('/api/cliente/registrar', async (req, res) => {
-    // Recibimos los datos desde Flutter
-    const { 
-        nombreCompleto = '', 
-        email = '', 
-        password = '', 
-        telefono = '', 
-        direccion = '', 
-        colonia = '', 
-        cp = '', 
-        ciudad = '', 
-        estado = '' 
+    let { 
+        nombreCompleto = '', email = '', password = '', telefono = '', 
+        direccion = '', colonia = '', cp = '', ciudad = '', estado = '',
+        ultimosCuatroAnterior = '' 
     } = req.body;
 
     try {
-        // 1. Validar que los datos mínimos existan (Email ya no es obligatorio aquí)
-        if (!telefono || !password || !nombreCompleto) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Faltan datos obligatorios (Nombre, Teléfono y Contraseña)" 
-            });
-        }
+        const telNuevo = telefono.toString().replace(/\D/g, '');
+        const nombreBusqueda = nombreCompleto.trim().toUpperCase();
+        const cpBusqueda = cp.toString().trim();
 
-        // 2. Verificar si el teléfono ya existe para evitar duplicados
-        const [existe] = await db.execute("SELECT Id FROM clientes WHERE Cel = ?", [telefono]);
-        if (existe.length > 0) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Este número de teléfono ya está registrado" 
-            });
-        }
-
-        // 3. Lógica de la clave (últimos 5 dígitos del teléfono para la columna 'Nombre')
-        const telefonoStr = telefono.toString().trim();
-        const claveTelefono = telefonoStr.length >= 5 
-            ? telefonoStr.substring(telefonoStr.length - 5) 
-            : telefonoStr;
-
-        // 4. SQL con tu nomenclatura específica
-        const sql = `INSERT INTO clientes 
-            (Nombre, Nombre2, email, Password, Calle, Barrio, CP, Ciudad, Estado, Cel, Saldo, LimiteCred, AutCred, Dias) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0)`;
+        // --- NUEVO: OBTENER EL TELÉFONO DE SOPORTE DINÁMICO ---
+        let telSoporte = '529631320318'; // Número de respaldo por si acaso
         
-        const [result] = await db.execute(sql, [
-            claveTelefono,      // Columna 'Nombre' (tu clave de 5 dígitos)
-            nombreCompleto,     // Columna 'Nombre2'
-            email || '',        // Si no hay email, enviamos cadena vacía
-            password,
-            direccion || '',    // Evitamos nulos si vienen vacíos
-            colonia || '',
-            cp || '',
-            ciudad || '',
-            estado || '',
-            telefono            // Columna 'Cel'
-        ]);
+        try {
+            // Buscamos el primer registro donde TelSoporte NO sea nulo ni esté vacío
+            const [empresaDB] = await db.execute(
+                "SELECT TelSoporte FROM empresa WHERE TelSoporte IS NOT NULL AND TelSoporte != '' LIMIT 1"
+            );
 
-        res.json({ success: true, clienteId: result.insertId });
+            if (empresaDB.length > 0) {
+                telSoporte = empresaDB[0].TelSoporte.toString().replace(/\D/g, '');
+                console.log("SOPORTE ENCONTRADO EN DB:", telSoporte); // <--- ESTO SALDRÁ EN PM2
+            } else {
+                console.log("OJO: No se encontró ningún TelSoporte válido en la tabla empresa.");
+            }
+        } catch (err) {
+            console.error("Error consultando tabla empresa:", err.message);
+        }   
+
+        // Asegurar el prefijo 52
+        if (telSoporte && !telSoporte.startsWith('52')) {
+            telSoporte = '52' + telSoporte;
+        }
+        // ------------------------------------------------------
+
+        // 1. ¿El teléfono nuevo ya existe?
+        const [existeCel] = await db.execute("SELECT Id FROM clientes WHERE Cel = ?", [telNuevo]);
+        if (existeCel.length > 0) {
+            return res.status(400).json({ success: false, message: "Este número ya está registrado." });
+        }
+
+        // 2. Buscar por Nombre para Fusión
+        const [registroViejo] = await db.execute(
+            "SELECT Id, Cel, CP, Password FROM clientes WHERE UPPER(TRIM(Nombre2)) = ?", 
+            [nombreBusqueda]
+        );
+
+        if (registroViejo.length > 0) {
+            const clienteDB = registroViejo[0];
+            const celEnDB = (clienteDB.Cel || '').toString().replace(/\D/g, '');
+
+            // REGLA 1: Si ya tiene contraseña, bloqueo total por seguridad
+            if (clienteDB.Password && clienteDB.Password.toString().trim() !== '') {
+                return res.status(401).json({ 
+                    success: false, 
+                    error: "SEGURIDAD_BLOQUEO",
+                    telefonoSoporte: telSoporte, // <--- ENVIAMOS EL TELÉFONO A FLUTTER
+                    message: "Esta cuenta tiene una contraseña ya registrada. Por seguridad deberás contactar a nuestro soporte por WhatsApp." 
+                });
+            }
+
+            // REGLA 2: Si el teléfono es diferente, pedimos validación
+            if (celEnDB !== '' && celEnDB !== telNuevo) {
+                console.log("Detectado conflicto de nombre. Enviando requiereValidacion a la App.");
+                
+                // Si la App aún no manda los 4 dígitos, mandamos la señal para que aparezca el cuadro azul
+                if (!ultimosCuatroAnterior) {
+                    return res.json({ 
+                        success: false, 
+                        requiereValidacion: true, // <--- DISPARADOR PARA FLUTTER
+                        message: "Identificamos que ya eres cliente. Por seguridad, ingresa los últimos 4 dígitos de tu teléfono anterior." 
+                    });
+                }
+                
+                // Si ya los mandó, validamos CP y dígitos
+                const cuatroDigitosDB = celEnDB.substring(celEnDB.length - 4);
+                const cpDB = (clienteDB.CP || '').toString().trim();
+
+                // --- LA NUEVA LÓGICA INTELIGENTE ---
+                // Si la DB no tiene CP, lo damos por bueno (true). Si sí tiene, los comparamos.
+                const cpCoincide = (cpDB === '') ? true : (cpDB === cpBusqueda);
+                const cuatroCoinciden = cuatroDigitosDB === ultimosCuatroAnterior.toString().trim();
+
+                if (!cpCoincide || !cuatroCoinciden) {
+                    return res.status(401).json({ 
+                        success: false, 
+                        error: "VALIDACION_FALLIDA",
+                        telefonoSoporte: telSoporte, // <--- ENVIAMOS EL TELÉFONO A FLUTTER
+                        message: "Los datos de validación no coinciden con nuestros registros." 
+                    });
+                }
+            }
+
+            // FUSIONAR (Si todo está bien o no tenía teléfono previo)
+            const sqlUpdate = `UPDATE clientes SET Cel=?, Password=?, email=?, Calle=?, Barrio=?, CP=?, Ciudad=?, Estado=? WHERE Id=?`;
+            await db.execute(sqlUpdate, [telNuevo, password, email, direccion.toUpperCase(), colonia.toUpperCase(), cpBusqueda, ciudad.toUpperCase(), estado.toUpperCase(), clienteDB.Id]);
+            return res.json({ success: true, message: "¡Cuenta vinculada con éxito!" });
+        }
+
+        // 3. Registro Nuevo (Si no hay coincidencia de nombre)
+        const claveNombre = telNuevo.length >= 5 ? telNuevo.substring(telNuevo.length - 5) : telNuevo;
+        const sqlInsert = `INSERT INTO clientes (Nombre, Nombre2, email, Password, Calle, Barrio, CP, Ciudad, Estado, Cel, Saldo, LimiteCred, AutCred, Dias) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0)`;
+        await db.execute(sqlInsert, [claveNombre, nombreBusqueda, email, password, direccion.toUpperCase(), colonia.toUpperCase(), cpBusqueda, ciudad.toUpperCase(), estado.toUpperCase(), telNuevo]);
+        res.json({ success: true, message: "Registro creado exitosamente." });
 
     } catch (e) {
-        console.error("Error en registro:", e.message);
-        res.status(500).json({ 
-            success: false, 
-            error: "Error interno al procesar el registro" 
-        });
+        res.status(500).json({ success: false, error: e.message });
     }
 });
 
@@ -1350,7 +1526,7 @@ app.post('/api/pedidos/nuevo', async (req, res) => {
             const sqlDetalle = `
                 INSERT INTO pending_orders 
                 (customer_id, invoice_no, product_id, qty, order_status, p_price, num_suc, order_date) 
-                VALUES (?, ?, ?, ?, 'pending', ?, ?, NOW())
+                VALUES (?, ?, ?, ?, 'PENDIENTE', ?, ?, NOW())
             `;
             // Agregué order_date al insert del detalle también por si acaso
             
@@ -1435,6 +1611,84 @@ app.get('/api/historial/:clienteId', async (req, res) => {
     } catch (error) {
         console.error("Error historial:", error);
         res.status(500).json({ success: false, message: 'Error al obtener historial' });
+    }
+});
+
+// ==========================================
+// MÓDULO DE LANZAMIENTOS (LOTES PENDIENTES)
+// ==========================================
+
+// 1. Obtener resumen de Lotes (Fechas programadas)
+app.get('/api/abmc/lotes-resumen', async (req, res) => {
+    try {
+        // Agrupamos por fecha y contamos cuántos están pendientes vs publicados
+        const query = `
+            SELECT 
+                DATE_FORMAT(LotePend, '%Y-%m-%d') as FechaLote, 
+                COUNT(*) as TotalProductos, 
+                SUM(pendiente) as TotalPendientes,
+                SUM(status) as TotalPublicados
+            FROM productos
+            WHERE LotePend IS NOT NULL
+            GROUP BY DATE_FORMAT(LotePend, '%Y-%m-%d')
+            ORDER BY FechaLote DESC
+        `;
+        const [rows] = await db.execute(query);
+        res.json(rows);
+    } catch (e) {
+        console.error("Error al obtener resumen de lotes:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 2. Acción Masiva: Publicar o Revertir un Lote completo
+app.post('/api/abmc/lotes/accion', async (req, res) => {
+    const { fechaLote, accion } = req.body; // accion debe ser 'publicar' o 'revertir'
+    
+    try {
+        // Lógica de negocio:
+        // Si es 'publicar' -> status = 1 (visible), pendiente = 0
+        // Si es 'revertir' -> status = 0 (invisible), pendiente = 1
+        let statusVal = accion === 'publicar' ? 1 : 0;
+        let pendienteVal = accion === 'publicar' ? 0 : 1;
+
+        const query = `
+            UPDATE productos 
+            SET status = ?, pendiente = ? 
+            WHERE DATE_FORMAT(LotePend, '%Y-%m-%d') = ?
+        `;
+        const [result] = await db.execute(query, [statusVal, pendienteVal, fechaLote]);
+        
+        res.json({ 
+            success: true, 
+            mensaje: `Lote ${accion === 'publicar' ? 'publicado' : 'revertido'} con éxito`,
+            actualizados: result.affectedRows 
+        });
+    } catch (e) {
+        console.error(`Error al ${accion} lote:`, e);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// 3. Obtener los productos detallados de un lote específico
+app.get('/api/abmc/lotes/:fecha/productos', async (req, res) => {
+    const { fecha } = req.params;
+    try {
+        const query = `
+            SELECT 
+                p.Id, p.Clave, p.Descripcion, p.Precio1, 
+                p.Foto, p.status, p.Activo, p.pendiente, p.ClavePro,
+                CAST(a1.ExisPVentas AS SIGNED) as stock_disponible
+            FROM productos p
+            LEFT JOIN alm1 a1 ON p.Clave = a1.Clave
+            WHERE DATE_FORMAT(p.LotePend, '%Y-%m-%d') = ?
+            ORDER BY p.Descripcion ASC
+        `;
+        const [rows] = await db.execute(query, [fecha]);
+        res.json(rows);
+    } catch (e) {
+        console.error("Error al obtener productos del lote:", e);
+        res.status(500).json({ error: e.message });
     }
 });
 
