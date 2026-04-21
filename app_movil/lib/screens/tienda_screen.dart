@@ -9,6 +9,9 @@ import 'detalle_producto_screen.dart';
 import '../widgets/product_card.dart';
 import '../widgets/tienda_modals.dart';
 import '../services/tienda_service.dart';
+import 'perfil_screen.dart';
+import 'package:http/http.dart' as http;
+import 'package:marquee/marquee.dart'; // <--- El nuevo import
 
 // NOTA: Se eliminaron los imports de Admin e Inventario
 
@@ -28,12 +31,21 @@ class _TiendaScreenState extends State<TiendaScreen> {
   dynamic sucursalActual;
   String? nombreCliente;
 
+  String? mensajeAviso;
+  Color colorFondoAviso = const Color(0xFFFFF176); // Amarillo por defecto
   // Eliminamos rolAdmin porque el cliente nunca es admin
   String nombreSucursal = "Sucursal";
   String categoriaSeleccionada = "TODOS";
   bool cargando = false;
   int totalItemsCarrito = 0;
   int sucursalSeleccionada = 1;
+
+  Color _hexToColor(String hexString) {
+    final buffer = StringBuffer();
+    if (hexString.length == 6 || hexString.length == 7) buffer.write('ff');
+    buffer.write(hexString.replaceFirst('#', ''));
+    return Color(int.parse(buffer.toString(), radix: 16));
+  }
 
   final ScrollController _scrollController = ScrollController();
   int _paginaActual = 0;
@@ -47,6 +59,7 @@ class _TiendaScreenState extends State<TiendaScreen> {
   @override
   void initState() {
     super.initState();
+    _cargarAvisoImportante();
     _cargarSesion();
     _cargarSucursales();
     _actualizarContadorCarrito();
@@ -71,6 +84,29 @@ class _TiendaScreenState extends State<TiendaScreen> {
 
   // --- MÉTODOS DE DATOS Y SESIÓN ---
 
+  Future<void> _cargarAvisoImportante() async {
+    try {
+      final res = await http.get(
+        Uri.parse('${widget.baseUrl}/api/avisos/activo'),
+      );
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body);
+        if (data['success'] == true) {
+          setState(() {
+            mensajeAviso = data['aviso']['mensaje'];
+            if (data['aviso']['color_fondo'] != null) {
+              colorFondoAviso = _hexToColor(data['aviso']['color_fondo']);
+            }
+          });
+        } else {
+          setState(() => mensajeAviso = null);
+        }
+      }
+    } catch (e) {
+      debugPrint("Error avisos: $e");
+    }
+  }
+
   Future<void> _cargarSesion() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
@@ -82,6 +118,8 @@ class _TiendaScreenState extends State<TiendaScreen> {
   }
 
   Future<void> _cargarDatosIniciales() async {
+    _cargarAvisoImportante();
+
     if (cargando || !mounted) return;
     setState(() => cargando = true);
 
@@ -461,7 +499,7 @@ class _TiendaScreenState extends State<TiendaScreen> {
     return Scaffold(
       backgroundColor: Colors.white,
       // --- MODIFICACIÓN CLAVE: DRAWER ELIMINADO ---
-      drawer: null,
+      drawer: _buildDrawer(),
 
       appBar: AppBar(
         backgroundColor: rojoFactory,
@@ -502,8 +540,11 @@ class _TiendaScreenState extends State<TiendaScreen> {
           _buildBotonLoginOut(),
         ],
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(95),
-          child: _buildBuscadorYCategorias(),
+          // Si hay aviso, sumamos 35 píxeles a la altura
+          preferredSize: Size.fromHeight(mensajeAviso != null ? 130 : 95),
+          child: Column(
+            children: [_buildBuscadorYCategorias(), _buildCintilloAvisos()],
+          ),
         ),
       ),
       body: SafeArea(
@@ -551,6 +592,33 @@ class _TiendaScreenState extends State<TiendaScreen> {
 
   // --- WIDGETS DE APOYO DE UI ---
   // (Sin cambios mayores, solo cosméticos si aplicaba)
+
+  Widget _buildCintilloAvisos() {
+    if (mensajeAviso == null) return const SizedBox.shrink();
+
+    return Container(
+      height: 35, // Altura fija y elegante
+      width: double.infinity,
+      color: colorFondoAviso,
+      child: Marquee(
+        text: "   🔔 ${mensajeAviso ?? ''}   ",
+        style: const TextStyle(
+          fontWeight: FontWeight.bold,
+          fontSize: 13,
+          color: Colors.black,
+        ),
+        scrollAxis: Axis.horizontal,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        blankSpace: 100.0, // Espacio entre el fin y el inicio del texto
+        velocity: 50.0, // Velocidad de desplazamiento
+        pauseAfterRound: const Duration(seconds: 1),
+        accelerationDuration: const Duration(seconds: 1),
+        accelerationCurve: Curves.linear,
+        decelerationDuration: const Duration(milliseconds: 500),
+        decelerationCurve: Curves.easeOut,
+      ),
+    );
+  }
 
   Widget _buildBuscadorYCategorias() {
     return Column(
@@ -629,6 +697,8 @@ class _TiendaScreenState extends State<TiendaScreen> {
     );
   }
 
+  // --- WIDGETS DE APOYO DE UI ---
+
   Widget _buildBotonCarrito() {
     return Stack(
       alignment: Alignment.center,
@@ -675,13 +745,13 @@ class _TiendaScreenState extends State<TiendaScreen> {
   Widget _buildBotonLoginOut() {
     return IconButton(
       icon: Icon(
-        nombreCliente == "Invitado"
+        (nombreCliente == null || nombreCliente == "Invitado")
             ? Icons.account_circle_outlined
             : Icons.exit_to_app,
         size: 26,
       ),
       onPressed: () {
-        if (nombreCliente == "Invitado") {
+        if (nombreCliente == null || nombreCliente == "Invitado") {
           Navigator.push(
             context,
             MaterialPageRoute(
@@ -696,4 +766,75 @@ class _TiendaScreenState extends State<TiendaScreen> {
       },
     );
   }
-}
+
+  // --- NUEVO DRAWER ---
+  Widget _buildDrawer() {
+    return Drawer(
+      child: Column(
+        children: [
+          UserAccountsDrawerHeader(
+            decoration: BoxDecoration(color: rojoFactory),
+            currentAccountPicture: const CircleAvatar(
+              backgroundColor: Colors.white,
+              child: Icon(Icons.person, size: 40, color: Color(0xFFD32F2F)),
+            ),
+            accountName: Text(
+              (nombreCliente == null || nombreCliente == "Invitado")
+                  ? "Bienvenido"
+                  : "Hola, $nombreCliente",
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            accountEmail: Text(
+              (nombreCliente == null || nombreCliente == "Invitado")
+                  ? "Inicia sesión para pedir"
+                  : "Cliente Factory",
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.home),
+            title: const Text("Inicio / Tienda"),
+            onTap: () => Navigator.pop(context),
+          ),
+          // Solo se muestra si NO es invitado
+          if (nombreCliente != null && nombreCliente != "Invitado")
+            ListTile(
+              leading: const Icon(Icons.person_outline),
+              title: const Text("Mi Perfil"),
+              subtitle: const Text("Configura tus datos de envío"),
+              onTap: () {
+                Navigator.pop(context); // Cerrar menú
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => PerfilScreen(baseUrl: widget.baseUrl),
+                  ),
+                );
+              },
+            ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.help_outline),
+            title: const Text("Soporte Técnico"),
+            onTap: () {
+              // Aquí puedes poner tu lógica de WhatsApp si gustas
+            },
+          ),
+          const Spacer(),
+          if (nombreCliente != null && nombreCliente != "Invitado")
+            ListTile(
+              leading: const Icon(Icons.logout, color: Colors.red),
+              title: const Text(
+                "Cerrar Sesión",
+                style: TextStyle(color: Colors.red),
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                _mostrarDialogoCerrarSesion();
+              },
+            ),
+          const SizedBox(height: 20),
+        ],
+      ),
+    );
+  }
+} // <--- FINAL DE LA CLASE

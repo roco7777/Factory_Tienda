@@ -306,6 +306,76 @@ app.post('/api/finalizar_pedido', async (req, res) => {
     }
 });
 
+// --- 1. OBTENER PERFIL DEL CLIENTE (GET) ---
+// --- ACTUALIZAR PERFIL DEL CLIENTE (COINCIDENCIA EXACTA CON FLUTTER) ---
+// --- 1. OBTENER DATOS DEL PERFIL (Esta es la que quita el círculo al entrar) ---
+app.get('/api/cliente/perfil', async (req, res) => {
+    const { id } = req.query;
+    console.log("🔎 Consultando datos para el cliente ID:", id);
+
+    if (!id) return res.status(400).json({ success: false, message: "Falta ID" });
+
+    try {
+        const [rows] = await db.execute("SELECT * FROM clientes WHERE Id = ?", [id]);
+        
+        if (rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Cliente no hallado" });
+        }
+
+        // Buscamos el teléfono de soporte dinámico de la tabla empresa
+        const [empresa] = await db.execute("SELECT TelSoporte FROM empresa WHERE TelSoporte != '' LIMIT 1");
+        let telSoporte = empresa.length > 0 ? empresa[0].TelSoporte : '529631320318';
+
+        res.json({
+            success: true,
+            cliente: rows[0],
+            telefonoSoporte: telSoporte
+        });
+    } catch (e) {
+        console.error("❌ Error en GET perfil:", e.message);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// --- 2. ACTUALIZAR DATOS DEL PERFIL (PUT) ---
+app.put('/api/cliente/perfil', async (req, res) => {
+    const { 
+        id, nombreCompleto, email, direccion, colonia, cp, ciudad, estado 
+    } = req.body;
+
+    console.log("💾 Guardando cambios para cliente ID:", id);
+
+    try {
+        const sql = `
+            UPDATE clientes SET 
+                Nombre2 = ?, 
+                email = ?, 
+                Calle = ?, 
+                Barrio = ?, 
+                Cp = ?, 
+                Ciudad = ?, 
+                Estado = ? 
+            WHERE Id = ?
+        `;
+
+        await db.execute(sql, [
+            nombreCompleto ? nombreCompleto.toUpperCase() : '',
+            email || '',
+            direccion ? direccion.toUpperCase() : '',
+            colonia ? colonia.toUpperCase() : '',
+            cp || '',
+            ciudad ? ciudad.toUpperCase() : '',
+            estado ? estado.toUpperCase() : '',
+            id
+        ]);
+
+        res.json({ success: true, message: "¡Perfil actualizado con éxito!" });
+    } catch (e) {
+        console.error("❌ Error en UPDATE perfil:", e.message);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
 // ==========================================
 // LOGIN Y CATALOGOS
 // ==========================================
@@ -1689,6 +1759,29 @@ app.get('/api/abmc/lotes/:fecha/productos', async (req, res) => {
     } catch (e) {
         console.error("Error al obtener productos del lote:", e);
         res.status(500).json({ error: e.message });
+    }
+});
+
+// --- GET AVISO ACTIVO CON COLOR CONFIGURABLE ---
+app.get('/api/avisos/activo', async (req, res) => {
+    try {
+        const sql = `
+            SELECT mensaje, color_fondo 
+            FROM avisos 
+            WHERE activo = 1 
+              AND (fecha_fin IS NULL OR fecha_fin > NOW())
+              AND (fecha_inicio <= NOW())
+            ORDER BY id DESC LIMIT 1
+        `;
+        const [rows] = await db.execute(sql);
+        
+        if (rows.length > 0) {
+            res.json({ success: true, aviso: rows[0] });
+        } else {
+            res.json({ success: false });
+        }
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
     }
 });
 
