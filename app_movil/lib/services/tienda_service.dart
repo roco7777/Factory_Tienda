@@ -122,6 +122,17 @@ class TiendaService {
     return json.decode(res.body);
   }
 
+  // 9. Nuevo método para formatear la URL de Google Drive
+  // En lib/services/tienda_service.dart
+  static String getImagenUrl(String? driveId) {
+    // Si es nulo, vacío o literalmente el texto "null"
+    if (driveId == null || driveId.isEmpty || driveId == 'null') {
+      return "";
+    }
+    // Formato optimizado para visualización rápida en Apps
+    return "https://lh3.googleusercontent.com/d/$driveId=h1000";
+  }
+
   //obtener url remota
   // El error era el espacio entre 'baseUrl' y 'Actual'
   static Future<String?> obtenerUrlRemota(String baseUrlActual) async {

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import '../core/constants.dart'; // Asegúrate de que aquí esté formatCurrency
+import '../core/constants.dart';
+import '../services/tienda_service.dart'; // Importante para la URL de Drive
 
 class ProductCard extends StatelessWidget {
   final dynamic item;
@@ -26,8 +27,13 @@ class ProductCard extends StatelessWidget {
 
     int preciosActivos = (p1 > 0 ? 1 : 0) + (p2 > 0 ? 1 : 0) + (p3 > 0 ? 1 : 0);
 
+    // --- NUEVA LÓGICA: OBTENER URL DE DRIVE ---
+    String driveId = (item['drive_id'] ?? item['DriveID'])?.toString() ?? '';
+    String imageUrl = TiendaService.getImagenUrl(driveId);
+
     return Card(
       elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       child: Column(
         children: [
           Expanded(
@@ -35,16 +41,47 @@ class ProductCard extends StatelessWidget {
               onTap: onTap,
               child: ClipRRect(
                 borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(4),
+                  top: Radius.circular(8),
                 ),
-                child:
-                    item['Foto'] != null && item['Foto'].toString().isNotEmpty
-                    ? Image.network(
-                        '$baseUrl/uploads/${item['Foto']}',
-                        fit: BoxFit.cover,
-                        width: double.infinity,
-                      )
-                    : const Icon(Icons.image, size: 50),
+                child: Hero(
+                  // Agregamos Hero aquí también para que la animación hacia el detalle sea fluida
+                  tag: 'product_image_${item['Id'] ?? item['Clave']}',
+                  child: imageUrl.isNotEmpty
+                      ? Image.network(
+                          imageUrl,
+                          fit: BoxFit
+                              .contain, // Cambiado a contain para no cortar productos
+                          width: double.infinity,
+                          // Manejo de errores para evitar la X roja fea
+                          errorBuilder: (context, error, stackTrace) =>
+                              const Icon(
+                                Icons.image_not_supported_outlined,
+                                size: 40,
+                                color: Colors.grey,
+                              ),
+                          // Placeholder mientras descarga de Drive
+                          loadingBuilder: (context, child, loadingProgress) {
+                            if (loadingProgress == null) return child;
+                            return const Center(
+                              child: SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            );
+                          },
+                        )
+                      : Container(
+                          color: Colors.grey[100],
+                          child: const Icon(
+                            Icons.image_outlined,
+                            size: 40,
+                            color: Colors.grey,
+                          ),
+                        ),
+                ),
               ),
             ),
           ),
@@ -68,13 +105,12 @@ class ProductCard extends StatelessWidget {
                 ),
                 const Divider(height: 10),
 
-                // Lógica de colores: Rojo (P1), Verde (P2), Azul (P3)
                 if (preciosActivos == 1)
                   _buildFila("Precio:", p1, Colors.red)
                 else ...[
                   if (p1 > 0) _buildFila("Min $m1:", p1, Colors.red),
-                  if (p2 > 0) _buildFila("Min $m2:", p2, Colors.green),
-                  if (p3 > 0) _buildFila("Min $m3:", p3, Colors.blue),
+                  if (p2 > 0) _buildFila("Min $m2:", p2, Colors.green[700]!),
+                  if (p3 > 0) _buildFila("Min $m3:", p3, Colors.blue[700]!),
                 ],
                 const SizedBox(height: 6),
                 SizedBox(
@@ -84,10 +120,17 @@ class ProductCard extends StatelessWidget {
                     onPressed: onAgregar,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.red[800],
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
                     ),
                     child: const Text(
                       "AGREGAR",
-                      style: TextStyle(color: Colors.white, fontSize: 11),
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
                 ),
@@ -104,7 +147,6 @@ class ProductCard extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Text(label, style: const TextStyle(fontSize: 10)),
-        // Usamos la función de formateo de tu constants.dart
         Text(
           "\$${price.toStringAsFixed(2)}",
           style: TextStyle(

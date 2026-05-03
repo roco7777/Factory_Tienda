@@ -705,6 +705,10 @@ class _TarjetaProducto extends StatelessWidget {
     bool esAgotado = error != null && stockDisponible <= 0;
     bool mostrarError = error != null && qty > stockDisponible && !esAgotado;
 
+    // --- NUEVA LÓGICA DE IMAGEN (GOOGLE DRIVE) ---
+    String driveId = (item['drive_id'] ?? item['DriveID'])?.toString() ?? '';
+    String imageUrl = TiendaService.getImagenUrl(driveId);
+
     return Opacity(
       opacity: esAgotado ? 0.6 : 1.0,
       child: Card(
@@ -729,17 +733,43 @@ class _TarjetaProducto extends StatelessWidget {
             children: [
               IgnorePointer(
                 ignoring: esAgotado,
-                child: GestureDetector(
+                child: // --- DENTRO DE _TarjetaProducto -> build -> Row ---
+                GestureDetector(
                   onTap: () => onShowFicha(item),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(8),
-                    child: Image.network(
-                      '$baseUrl/uploads/${item['Foto']}',
-                      width: 75,
-                      height: 75,
-                      fit: BoxFit.cover,
-                      errorBuilder: (c, e, s) =>
-                          const Icon(Icons.image, size: 75),
+                    child: Hero(
+                      tag: 'product_image_${item['p_id'] ?? item['Clave']}',
+                      child: imageUrl.isNotEmpty
+                          ? Image.network(
+                              imageUrl, // <--- CAMBIO CLAVE: Usar la variable con el link de Drive
+                              width: 75,
+                              height: 75,
+                              fit: BoxFit.contain,
+                              errorBuilder: (c, e, s) => const Icon(
+                                Icons.image_not_supported_outlined,
+                                size: 40,
+                                color: Colors.grey,
+                              ),
+                              loadingBuilder:
+                                  (context, child, loadingProgress) {
+                                    if (loadingProgress == null) return child;
+                                    return const SizedBox(
+                                      width: 75,
+                                      height: 75,
+                                      child: Center(
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                            )
+                          : const Icon(
+                              Icons.image,
+                              size: 75,
+                              color: Colors.grey,
+                            ),
                     ),
                   ),
                 ),
@@ -750,7 +780,7 @@ class _TarjetaProducto extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      item['Descripcion'],
+                      item['Descripcion'] ?? '',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(

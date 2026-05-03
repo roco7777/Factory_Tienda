@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/tienda_service.dart'; // Asegúrate de que la ruta sea correcta
 
 class DetalleProductoScreen extends StatelessWidget {
   final dynamic item;
@@ -16,6 +17,7 @@ class DetalleProductoScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     String productDesc = item['product_desc']?.toString() ?? "";
 
+    // Lógica de Precios
     double p1 = double.tryParse(item['Precio1']?.toString() ?? '0') ?? 0;
     double p2 = double.tryParse(item['Precio2']?.toString() ?? '0') ?? 0;
     double p3 = double.tryParse(item['Precio3']?.toString() ?? '0') ?? 0;
@@ -25,9 +27,13 @@ class DetalleProductoScreen extends StatelessWidget {
     int m3 = (double.tryParse(item['Min3']?.toString() ?? '0') ?? 0).toInt();
 
     int preciosActivos = (p1 > 0 ? 1 : 0) + (p2 > 0 ? 1 : 0) + (p3 > 0 ? 1 : 0);
-    String imageUrl = (item['Foto'] != null && item['Foto'] != "")
-        ? '$baseUrl/uploads/${item['Foto']}'
-        : "";
+
+    // --- NUEVA LÓGICA DE IMAGEN (GOOGLE DRIVE) ---
+    // Intentamos obtener el ID de drive (soporta drive_id o DriveID por si acaso)
+    String driveId = (item['drive_id'] ?? item['DriveID'])?.toString() ?? '';
+
+    // Obtenemos la URL final mediante el servicio
+    String imageUrl = TiendaService.getImagenUrl(driveId);
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -42,7 +48,7 @@ class DetalleProductoScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // --- SECCIÓN FOTO ESTÁTICA (TOCA PARA ABRIR) ---
+            // --- SECCIÓN FOTO ESTÁTICA ---
             GestureDetector(
               onTap: () {
                 if (imageUrl.isNotEmpty) {
@@ -52,6 +58,8 @@ class DetalleProductoScreen extends StatelessWidget {
                       builder: (context) => FullScreenImageView(
                         imageUrl: imageUrl,
                         clave: item['Clave'],
+                        // Pasamos el ID único para que el Hero sepa a quién animar
+                        tagId: item['Id'] ?? item['Clave'],
                       ),
                     ),
                   );
@@ -63,20 +71,73 @@ class DetalleProductoScreen extends StatelessWidget {
                   Container(
                     width: double.infinity,
                     height: 380,
-                    color: Colors.white,
+                    color: Colors
+                        .grey[50], // Un fondo gris muy claro para que luzca mejor
                     child: imageUrl.isNotEmpty
-                        // Usamos Hero para una animación de transición suave
                         ? Hero(
                             tag: 'product_image_${item['Id'] ?? item['Clave']}',
-                            child: Image.network(imageUrl, fit: BoxFit.contain),
+                            child: Image.network(
+                              imageUrl,
+                              fit: BoxFit.contain,
+                              // Mientras carga, ponemos un circulito de progreso
+                              loadingBuilder:
+                                  (context, child, loadingProgress) {
+                                    if (loadingProgress == null) return child;
+                                    return Center(
+                                      child: CircularProgressIndicator(
+                                        color: Colors.red[800],
+                                        value:
+                                            loadingProgress
+                                                    .expectedTotalBytes !=
+                                                null
+                                            ? loadingProgress
+                                                      .cumulativeBytesLoaded /
+                                                  loadingProgress
+                                                      .expectedTotalBytes!
+                                            : null,
+                                      ),
+                                    );
+                                  },
+                              // SI FALLA O NO EXISTE EL DRIVE_ID:
+                              errorBuilder: (context, error, stackTrace) =>
+                                  Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(
+                                        Icons.image_not_supported_outlined,
+                                        size: 80,
+                                        color: Colors.grey[400],
+                                      ),
+                                      const SizedBox(height: 10),
+                                      Text(
+                                        "Imagen no disponible",
+                                        style: TextStyle(
+                                          color: Colors.grey[500],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                            ),
                           )
-                        : const Icon(
-                            Icons.image,
-                            size: 100,
-                            color: Colors.grey,
+                        : Center(
+                            // Si de plano el driveId venía vacío desde la BD
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.cloud_off,
+                                  size: 80,
+                                  color: Colors.grey[300],
+                                ),
+                                const SizedBox(height: 10),
+                                Text(
+                                  "Sin enlace a Drive",
+                                  style: TextStyle(color: Colors.grey[400]),
+                                ),
+                              ],
+                            ),
                           ),
                   ),
-                  // Indicador visual de que se puede ampliar
                   if (imageUrl.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.all(12.0),
@@ -102,7 +163,6 @@ class DetalleProductoScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Nombre del Producto (Tamaño 18)
                   Text(
                     item['Descripcion'] ?? "",
                     style: const TextStyle(
@@ -111,8 +171,6 @@ class DetalleProductoScreen extends StatelessWidget {
                       color: Colors.black87,
                     ),
                   ),
-
-                  // Clave del Producto
                   const SizedBox(height: 4),
                   Text(
                     "Clave: ${item['Clave'] ?? 'N/A'}",
@@ -122,10 +180,8 @@ class DetalleProductoScreen extends StatelessWidget {
                       fontWeight: FontWeight.w500,
                     ),
                   ),
-
                   const SizedBox(height: 15),
 
-                  // Información Adicional
                   if (productDesc.isNotEmpty && productDesc != "null") ...[
                     const Text(
                       "INFORMACIÓN ADICIONAL",
@@ -152,7 +208,6 @@ class DetalleProductoScreen extends StatelessWidget {
                     child: Divider(color: Colors.black12),
                   ),
 
-                  // --- SECCIÓN DE PRECIOS ---
                   const Text(
                     "LISTA DE PRECIOS",
                     style: TextStyle(
@@ -191,7 +246,6 @@ class DetalleProductoScreen extends StatelessWidget {
 
                   const SizedBox(height: 30),
 
-                  // --- BOTÓN AGREGAR AL PEDIDO ---
                   SizedBox(
                     width: double.infinity,
                     height: 55,
@@ -260,12 +314,18 @@ class DetalleProductoScreen extends StatelessWidget {
   }
 }
 
-// --- NUEVO WIDGET PARA PANTALLA COMPLETA ---
+// --- WIDGET PARA PANTALLA COMPLETA ---
 class FullScreenImageView extends StatelessWidget {
   final String imageUrl;
   final String? clave;
+  final dynamic tagId;
 
-  const FullScreenImageView({super.key, required this.imageUrl, this.clave});
+  const FullScreenImageView({
+    super.key,
+    required this.imageUrl,
+    this.clave,
+    this.tagId,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -281,18 +341,16 @@ class FullScreenImageView extends StatelessWidget {
         ),
       ),
       body: SizedBox.expand(
-        // <-- HACE QUE EL ÁREA DE INTERACCIÓN OCUPE TODA LA PANTALLA
         child: InteractiveViewer(
           panEnabled: true,
           minScale: 1.0,
           maxScale: 5.0,
-          boundaryMargin: const EdgeInsets.all(0), // Permite libertad total
           child: Hero(
-            tag: 'product_image_${clave ?? 'zoom'}',
+            tag:
+                'product_image_$tagId', // Usamos el mismo tagId para el efecto smooth
             child: Image.network(
               imageUrl,
-              fit: BoxFit
-                  .contain, // Mantiene la proporción pero dentro del área expandida
+              fit: BoxFit.contain,
               alignment: Alignment.center,
             ),
           ),

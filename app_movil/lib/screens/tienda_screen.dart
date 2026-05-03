@@ -146,10 +146,22 @@ class _TiendaScreenState extends State<TiendaScreen> {
         _hayMasProductos = data.length >= 10;
       });
 
+      //for (var prod in data) {
+      // if (prod['Foto'] != null && prod['Foto'] != "" && mounted) {
+      // precacheImage(
+      // NetworkImage('${widget.baseUrl}/uploads/${prod['Foto']}'),
+      //context,
+      //);
       for (var prod in data) {
-        if (prod['Foto'] != null && prod['Foto'] != "" && mounted) {
+        // Cambiamos la lógica para usar el drive_id
+        String driveId =
+            (prod['drive_id'] ?? prod['DriveID'])?.toString() ?? '';
+
+        if (driveId.isNotEmpty && mounted) {
           precacheImage(
-            NetworkImage('${widget.baseUrl}/uploads/${prod['Foto']}'),
+            NetworkImage(
+              TiendaService.getImagenUrl(driveId),
+            ), // <-- USA LA NUEVA URL
             context,
           );
         }

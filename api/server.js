@@ -12,8 +12,9 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// --- CONFIGURACIÓN DE RUTAS Y DRIVE ---
-const rutaFotos = path.join('C:', 'Users', 'Administrador', 'Mi unidad (factorymayoreo@gmail.com)', 'Fotos_CIF');
+// --- 1. CONFIGURACIÓN DE RUTAS (AJUSTADO PARA LINUX/GOOGLE CLOUD) ---
+// En Linux no usamos C:\. Usaremos una carpeta en tu home de usuario.
+const rutaFotos = path.join(__dirname, 'uploads'); 
 
 if (!fs.existsSync(rutaFotos)) {
     fs.mkdirSync(rutaFotos, { recursive: true });
@@ -21,7 +22,7 @@ if (!fs.existsSync(rutaFotos)) {
 
 app.use('/uploads', express.static(rutaFotos));
 
-// --- CONFIGURACIÓN DE MULTER (ALMACENAMIENTO) ---
+// --- CONFIGURACIÓN DE MULTER ---
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
         cb(null, rutaFotos);
@@ -33,11 +34,11 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-// --- CONFIGURACIÓN DE BASE DE DATOS ---
+// --- 2. CONFIGURACIÓN DE BASE DE DATOS (Mantenemos localhost para Google Cloud) ---
 const db = mysql.createPool({
     host: '127.0.0.1',
     user: 'root',
-    password: 'ADMIN', 
+    password: 'ADMIN', // <-- Asegúrate que sea la misma contraseña de tu MariaDB en la nube
     database: 'Factory',
     dateStrings: true,
     timezone: '+00:00',
@@ -56,10 +57,9 @@ function calcularValores(precio, costo) {
 }
 
 // ==========================================
-// RUTAS DE FOTOS
+// RUTAS DE PRODUCTOS Y STOCK
 // ==========================================
 
-// --- PRIMERO LA RUTA ESPECÍFICA ---
 app.get('/api/producto/stock-actual', async (req, res) => {
     const { p_id, num_suc } = req.query;
     try {
@@ -79,7 +79,6 @@ app.get('/api/producto/stock-actual', async (req, res) => {
             res.json({ Min1: 1, stock_disponible: 0 });
         }
     } catch (e) {
-        console.error("Error en stock-actual:", e);
         res.status(500).json({ error: e.message });
     }
 });
@@ -100,62 +99,38 @@ app.get('/api/config/api_url', async (req, res) => {
 });
 
 // ==========================================
-// RUTA DE SUBIDA OPTIMIZADA CON SHARP
+// RUTA DE SUBIDA CON SHARP (CORREGIDA)
 // ==========================================
 app.post('/api/producto/upload-foto', upload.single('foto'), async (req, res) => {
     const { clave } = req.body;
-    
-    // 1. Validar que llegó un archivo
-    if (!req.file) {
-        return res.status(400).json({ success: false, message: 'No se subió ningún archivo' });
-    }
+    if (!req.file) return res.status(400).json({ success: false, message: 'No se subió archivo' });
 
     try {
-        // Definimos las rutas
-        const rutaOriginal = req.file.path; // El archivo pesado temporal
-        const nombreFinal = `${clave}-${Date.now()}.jpg`; // Nombre estandarizado
-        const rutaFinal = path.join(rutaFotos, nombreFinal); // Destino final
+        const rutaOriginal = req.file.path;
+        const nombreFinal = `${clave}-${Date.now()}.jpg`;
+        const rutaFinal = path.join(rutaFotos, nombreFinal);
 
-        // 2. PROCESAMIENTO: Redimensionar y Comprimir
-        // Esto convierte una foto de 5MB en una de ~150KB
         await sharp(rutaOriginal)
-            .resize(800, null, { // Máximo 800px de ancho, alto automático
-                withoutEnlargement: true, 
-                fit: 'inside'
-            })
+            .resize(800, null, { withoutEnlargement: true, fit: 'inside' })
             .jpeg({ 
                 quality: 80, 
-                progressive: True,       // <--- OBLIGATORIO: 'false' para que sea Baseline (Estándar)
-                mozjpeg: True,           // <--- Desactivamos optimizaciones modernas
-            })// Calidad 80% es perfecta para móvil
+                progressive: true, // Corregido: true en minúscula
+                mozjpeg: true      // Corregido: true en minúscula
+            })
             .toFile(rutaFinal);
 
-        // 3. LIMPIEZA: Borrar el archivo pesado original
-        try {
-            if (fs.existsSync(rutaOriginal)) {
-                 fs.unlinkSync(rutaOriginal); 
-            }
-        } catch (errBorrado) {
-            console.error("No se pudo borrar el temporal, pero no afecta.");
-        }
+        if (fs.existsSync(rutaOriginal)) fs.unlinkSync(rutaOriginal); 
 
-        // 4. BORRAR FOTO ANTIGUA (Si el producto ya tenía una)
         const [rows] = await db.execute('SELECT Foto FROM productos WHERE Clave = ?', [clave]);
         if (rows.length > 0 && rows[0].Foto) {
             const viejaPath = path.join(rutaFotos, rows[0].Foto);
-            // Verificamos que no sea la misma que acabamos de crear
-            if (fs.existsSync(viejaPath) && rows[0].Foto !== nombreFinal) {
-                try { fs.unlinkSync(viejaPath); } catch(e) {}
-            }
+            if (fs.existsSync(viejaPath)) try { fs.unlinkSync(viejaPath); } catch(e) {}
         }
 
-        // 5. ACTUALIZAR BASE DE DATOS
         await db.execute('UPDATE productos SET Foto = ? WHERE Clave = ?', [nombreFinal, clave]);
-        
         res.json({ success: true, foto: nombreFinal });
 
     } catch (e) {
-        console.error("Error al procesar imagen:", e);
         res.status(500).json({ success: false, message: e.message });
     }
 });
@@ -163,11 +138,14 @@ app.post('/api/producto/upload-foto', upload.single('foto'), async (req, res) =>
 app.post('/api/producto/delete-foto', async (req, res) => {
     const { clave } = req.body;
     try {
-        const [rows] = await db.execute('SELECT Foto FROM PRODUCTOS WHERE Clave = ?', [clave]);
+        const [rows] = await db.execute('SELECT Foto FROM productos WHERE Clave = ?', [clave]);
         if (rows.length > 0 && rows[0].Foto) {
             const fotoPath = path.join(rutaFotos, rows[0].Foto);
             if (fs.existsSync(fotoPath)) fs.unlinkSync(fotoPath);
-            await db.execute('UPDATE PRODUCTOS SET Foto = NULL WHERE Clave = ?', [clave]);
+            
+            // IMPORTANTE: Limpiamos tanto la Foto local como el drive_id 
+            // para que la App sepa que ya no hay imagen.
+            await db.execute('UPDATE productos SET Foto = NULL, drive_id = NULL WHERE Clave = ?', [clave]);
         }
         res.json({ success: true });
     } catch (e) {
@@ -175,18 +153,62 @@ app.post('/api/producto/delete-foto', async (req, res) => {
     }
 });
 
-// RUTA CRÍTICA: Obtener un solo producto para la pantalla de EDICIÓN
+// ==========================================
+// CONSULTA DE INVENTARIO (CON DRIVE_ID PARA LA APP)
+// ==========================================
+app.get('/api/inventario', async (req, res) => {
+    const qRaw = req.query.q || '';
+    const page = parseInt(req.query.page) || 0; 
+    const idSuc = req.query.idSuc || 1; 
+    const seed = req.query.seed || 1;
+    const limit = 10; 
+    const offset = page * limit;
+    
+    try {
+        const camposSelect = `
+            p.Id, p.Clave, p.Descripcion, p.product_desc, p.Precio1, p.Precio2, p.Precio3, 
+            p.Min1, p.Min2, p.Min3, p.Foto, p.drive_id, p.Tipo, p.status, p.Activo,
+            CAST(a.ExisPVentas AS SIGNED) as stock_disponible
+        `;
+
+        let query;
+        let params;
+
+        if (qRaw === '') {
+            query = `SELECT ${camposSelect}
+                     FROM productos p
+                     INNER JOIN alm${idSuc} a ON p.Clave = a.Clave
+                     WHERE p.status = 1 AND a.ExisPVentas > 0
+                     ORDER BY RAND(${seed}) 
+                     LIMIT ? OFFSET ?`;
+            params = [limit, offset];
+        } else {
+            const searchPattern = `%${qRaw.trim()}%`;
+            query = `SELECT ${camposSelect}
+                     FROM productos p
+                     INNER JOIN alm${idSuc} a ON p.Clave = a.Clave
+                     WHERE p.status = 1 AND a.ExisPVentas > 0
+                     AND (p.Descripcion LIKE ? OR p.Clave LIKE ? OR p.Tipo LIKE ?)
+                     ORDER BY (p.Descripcion LIKE ?) DESC, p.Descripcion ASC 
+                     LIMIT ? OFFSET ?`;
+            params = [searchPattern, searchPattern, searchPattern, `${qRaw.trim()}%`, limit, offset];
+        }
+
+        const [results] = await db.execute(query, params);
+        res.json(results);
+    } catch (e) { 
+        res.status(500).json({ error: e.message }); 
+    }
+});
+
+// RUTA INDIVIDUAL (CON DRIVE_ID)
 app.get('/api/producto/:clave', async (req, res) => {
     const { clave } = req.params;
-    
-    // Eliminamos los CONVERT para usar los índices B-Tree que ya creamos
     const query = `
-        SELECT p.*, 
-               a1.ExisPVentas AS alm1_pventas, a1.ExisBodega AS alm1_bodega, a1.ACTIVO AS alm1_activo,
-               a2.ExisPVentas AS alm2_pventas, a2.ExisBodega AS alm2_bodega, a2.ACTIVO AS alm2_activo,
-               a3.ExisPVentas AS alm3_pventas, a3.ExisBodega AS alm3_bodega, a3.ACTIVO AS alm3_activo,
-               a4.ExisPVentas AS alm4_pventas, a4.ExisBodega AS alm4_bodega, a4.ACTIVO AS alm4_activo,
-               a5.ExisPVentas AS alm5_pventas, a5.ExisBodega AS alm5_bodega, a5.ACTIVO AS alm5_activo 
+        SELECT p.*, p.drive_id,
+               a1.ExisPVentas AS alm1_pventas, a2.ExisPVentas AS alm2_pventas, 
+               a3.ExisPVentas AS alm3_pventas, a4.ExisPVentas AS alm4_pventas, 
+               a5.ExisPVentas AS alm5_pventas 
         FROM productos p 
         LEFT JOIN alm1 a1 ON p.Clave = a1.Clave
         LEFT JOIN alm2 a2 ON p.Clave = a2.Clave
@@ -196,17 +218,12 @@ app.get('/api/producto/:clave', async (req, res) => {
         WHERE p.Clave = ?`;
 
     try {
-        // Al usar db.execute con el índice en p.Clave, la respuesta es de nivel milisegundos
         const [results] = await db.execute(query, [clave]);
-        
-        // Enviamos el primer resultado o un objeto vacío si no existe
         res.json(results[0] || {}); 
     } catch (e) {
-        console.error("Error al obtener producto individual optimizado:", e.message);
         res.status(500).json({ error: e.message });
     }
 });
-
 
 // RUTA PARA VACIAR EL CARRITO (Necesaria para el botón de la App)
 app.post('/api/carrito/vaciar', async (req, res) => {
@@ -586,7 +603,7 @@ app.get('/api/carrito', async (req, res) => {
         const sucId = itemsCart[0].num_suc;
 
         const sqlFinal = `
-            SELECT c.*, p.Descripcion, p.Foto, p.Clave, p.Precio1, p.Precio2, p.Precio3, p.Min1, p.Min2, p.Min3,
+            SELECT c.*, p.Descripcion, p.drive_id, p.Foto, p.Clave, p.Precio1, p.Precio2, p.Precio3, p.Min1, p.Min2, p.Min3,
             a.ExisPVentas as stock_disponible,
             e.Sucursal as NombreSucursal,
             e.Pedidos as permite_pedidos,
@@ -1781,6 +1798,88 @@ app.get('/api/avisos/activo', async (req, res) => {
             res.json({ success: false });
         }
     } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// ==========================================
+//   RUTAS ADMINISTRATIVAS PARA AVISOS
+// ==========================================
+
+// 1. OBTENER TODOS LOS AVISOS (Para la lista del Admin)
+app.get('/api/admin/avisos', async (req, res) => {
+    try {
+        // Traemos todos, ordenados por el más reciente primero
+        const sql = "SELECT * FROM avisos ORDER BY id DESC";
+        const [rows] = await db.execute(sql);
+        res.json({ success: true, avisos: rows });
+    } catch (e) {
+        console.error("❌ Error en GET admin avisos:", e.message);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// 2. CREAR UN NUEVO AVISO
+app.post('/api/admin/avisos', async (req, res) => {
+    const { mensaje, fecha_inicio, fecha_fin, color_fondo, activo } = req.body;
+    console.log("🚀 Creando nuevo aviso:", mensaje);
+
+    try {
+        const sql = `
+            INSERT INTO avisos (mensaje, fecha_inicio, fecha_fin, color_fondo, activo) 
+            VALUES (?, ?, ?, ?, ?)
+        `;
+        await db.execute(sql, [
+            mensaje, 
+            fecha_inicio, 
+            fecha_fin, 
+            color_fondo || '#FFF176', 
+            activo ? 1 : 0
+        ]);
+        res.json({ success: true, message: "¡Aviso creado con éxito!" });
+    } catch (e) {
+        console.error("❌ Error al crear aviso:", e.message);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// 3. ACTUALIZAR UN AVISO EXISTENTE (O cambiar su estado activo/inactivo)
+app.put('/api/admin/avisos/:id', async (req, res) => {
+    const { id } = req.params;
+    const { mensaje, fecha_inicio, fecha_fin, color_fondo, activo } = req.body;
+
+    try {
+        // Primero verificamos qué datos llegaron para no borrar los que ya existen
+        // Si solo llega 'activo', solo actualizamos ese campo (útil para el Switch de la lista)
+        let sql, params;
+
+        if (mensaje !== undefined) {
+            // Actualización completa desde el Modal
+            sql = `
+                UPDATE avisos SET 
+                    mensaje = ?, 
+                    fecha_inicio = ?, 
+                    fecha_fin = ?, 
+                    color_fondo = ?, 
+                    activo = ? 
+                WHERE id = ?
+            `;
+            params = [mensaje, fecha_inicio, fecha_fin, color_fondo, activo, id];
+        } else {
+            // Actualización rápida del Switch (activo/inactivo)
+            sql = "UPDATE avisos SET activo = ? WHERE id = ?";
+            params = [activo, id];
+        }
+
+        const [result] = await db.execute(sql, params);
+
+        if (result.affectedRows > 0) {
+            res.json({ success: true, message: "Aviso actualizado correctamente" });
+        } else {
+            res.status(404).json({ success: false, message: "No se encontró el aviso" });
+        }
+    } catch (e) {
+        console.error("❌ Error al actualizar aviso:", e.message);
         res.status(500).json({ success: false, error: e.message });
     }
 });

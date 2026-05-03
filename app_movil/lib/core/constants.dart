@@ -1,5 +1,5 @@
 class AppConfig {
-  static const String baseUrl = "http://100.82.170.128:3000";
+  static const String baseUrl = "http://34.57.243.117:3000";
   //"https://erma-contributorial-sufferingly.ngrok-free.dev";
 }
 

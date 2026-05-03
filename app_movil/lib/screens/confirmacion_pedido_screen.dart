@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/tienda_service.dart';
 
 class ConfirmacionPedidoScreen extends StatefulWidget {
   final String baseUrl;
@@ -42,24 +43,20 @@ class _ConfirmacionPedidoScreenState extends State<ConfirmacionPedidoScreen> {
   }
 
   // --- FUNCIÓN PARA VER FOTO (OPTIMIZADA) ---
-  void _mostrarFotoProducto(String nombreArchivoFoto, String descripcion) {
-    if (nombreArchivoFoto.isEmpty) {
+  void _mostrarFotoProducto(dynamic item) {
+    // 1. Extraemos el drive_id del objeto item
+    String driveId = (item['drive_id'] ?? item['DriveID'])?.toString() ?? '';
+    String descripcion = item['Descripcion'] ?? 'Producto';
+
+    if (driveId.isEmpty || driveId == 'null') {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Este producto no tiene imagen asignada")),
+        const SnackBar(content: Text("Este producto no tiene imagen en Drive")),
       );
       return;
     }
 
-    // 1. Limpieza de URL: Quitamos '/api' si existe
-    String urlBaseLimpia = widget.baseUrl.replaceAll('/api', '');
-    if (urlBaseLimpia.endsWith('/')) {
-      urlBaseLimpia = urlBaseLimpia.substring(0, urlBaseLimpia.length - 1);
-    }
-
-    // 2. Construcción final usando el nombre real de la BD
-    final String urlFoto = '$urlBaseLimpia/uploads/$nombreArchivoFoto';
-
-    print("📸 Cargando foto: $urlFoto");
+    // 2. Usamos nuestra función maestra de TiendaService
+    final String urlFoto = TiendaService.getImagenUrl(driveId);
 
     showDialog(
       context: context,
@@ -69,37 +66,20 @@ class _ConfirmacionPedidoScreenState extends State<ConfirmacionPedidoScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              constraints: const BoxConstraints(maxHeight: 300),
+              constraints: const BoxConstraints(maxHeight: 350),
               width: double.maxFinite,
               child: Image.network(
                 urlFoto,
                 fit: BoxFit.contain,
-                // OPTIMIZACIÓN: Reducimos el uso de memoria para que cargue rápido
-                errorBuilder: (ctx, error, stackTrace) {
-                  return Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.broken_image,
-                        size: 50,
-                        color: Colors.grey[400],
-                      ),
-                      const SizedBox(height: 10),
-                      const Text(
-                        "No se pudo cargar",
-                        style: TextStyle(color: Colors.grey),
-                      ),
-                      // Texto pequeño para depurar
-                      Text(
-                        nombreArchivoFoto,
-                        style: const TextStyle(
-                          fontSize: 10,
-                          color: Colors.grey,
-                        ),
-                      ),
-                    ],
-                  );
+                loadingBuilder: (context, child, loadingProgress) {
+                  if (loadingProgress == null) return child;
+                  return const Center(child: CircularProgressIndicator());
                 },
+                errorBuilder: (ctx, error, stackTrace) => const Icon(
+                  Icons.broken_image,
+                  size: 80,
+                  color: Colors.grey,
+                ),
               ),
             ),
           ],
@@ -249,13 +229,14 @@ class _ConfirmacionPedidoScreenState extends State<ConfirmacionPedidoScreen> {
         final subtotal = qty * precio;
 
         // Obtenemos el nombre REAL del archivo de la BD
-        final String fotoArchivo = item['Foto']?.toString() ?? '';
+        final String driveId =
+            (item['drive_id'] ?? item['DriveID'])?.toString() ?? '';
 
         return Card(
           elevation: 1,
           margin: const EdgeInsets.symmetric(vertical: 4),
           child: InkWell(
-            onTap: () => _mostrarFotoProducto(fotoArchivo, desc),
+            onTap: () => _mostrarFotoProducto(item),
             borderRadius: BorderRadius.circular(4),
             child: Padding(
               padding: const EdgeInsets.all(12.0),
@@ -265,18 +246,38 @@ class _ConfirmacionPedidoScreenState extends State<ConfirmacionPedidoScreen> {
                     width: 45,
                     height: 45,
                     decoration: BoxDecoration(
-                      color: Colors.blue.shade50,
+                      color: Colors.grey[100],
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    // Icono Azul si hay foto, Gris si no
-                    child: Icon(
-                      fotoArchivo.isNotEmpty
-                          ? Icons.camera_alt
-                          : Icons.no_photography,
-                      color: fotoArchivo.isNotEmpty
-                          ? Colors.blue.shade300
-                          : Colors.grey.shade300,
-                      size: 20,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: driveId.isNotEmpty && driveId != 'null'
+                          ? Image.network(
+                              TiendaService.getImagenUrl(driveId),
+                              fit: BoxFit.cover,
+                              errorBuilder: (ctx, err, stack) => const Icon(
+                                Icons.broken_image,
+                                size: 20,
+                                color: Colors.grey,
+                              ),
+                              loadingBuilder: (ctx, child, progress) {
+                                if (progress == null) return child;
+                                return const Center(
+                                  child: SizedBox(
+                                    width: 15,
+                                    height: 15,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
+                                );
+                              },
+                            )
+                          : const Icon(
+                              Icons.no_photography,
+                              color: Colors.grey,
+                              size: 20,
+                            ),
                     ),
                   ),
                   const SizedBox(width: 15),
