@@ -46,10 +46,21 @@ dependencies:
   firebase_core: ^4.7.0
   firebase_auth: ^6.4.0
   marquee: ^2.2.3
+  firebase_messaging: ^16.2.0
+  flutter_local_notifications: ^21.0.0
+  
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  flutter_launcher_icons: "^0.13.1" # Asegúrate de tener esta línea
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/images/icono_f.png"
+  adaptive_icon_background: "#ED3237" # Tu rojo exacto
+  adaptive_icon_foreground: "assets/images/icono_f.png"
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
@@ -70,6 +81,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/sounds/beep.mp3
+    - assets/images/logo_factory.png
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg

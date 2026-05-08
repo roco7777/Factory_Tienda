@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart'; // <--- Agrega esto al principio
+import 'package:url_launcher/url_launcher.dart';
 
 class TiendaService {
   // 1. Obtener Categorías
@@ -10,21 +11,32 @@ class TiendaService {
     throw Exception("Error al cargar categorías");
   }
 
-  // 2. Obtener Inventario (Paginación + Semilla MariaDB)
+  // 2. Obtener Inventario (Híbrido: Búsqueda Potente + Filtro de Tipo)
   static Future<List<dynamic>> fetchInventario({
     required String baseUrl,
     String query = "",
+    String categoria = "",
     int page = 0,
     required int idSuc,
     required int seed,
   }) async {
-    final res = await http.get(
-      Uri.parse(
-        '$baseUrl/api/inventario?q=$query&page=$page&idSuc=$idSuc&seed=$seed',
-      ),
-    );
+    // Construimos la URL base
+    String url =
+        '$baseUrl/api/tienda/buscar?page=$page&idSuc=$idSuc&seed=$seed';
+
+    // Solo añadimos 'q' si hay texto real
+    if (query.trim().isNotEmpty) {
+      url += "&q=${Uri.encodeComponent(query.trim())}";
+    }
+
+    // Solo añadimos 'tipo' si hay categoría y no es TODOS
+    if (categoria.isNotEmpty && categoria != "TODOS") {
+      url += "&tipo=${Uri.encodeComponent(categoria.trim())}";
+    }
+
+    final res = await http.get(Uri.parse(url));
     if (res.statusCode == 200) return json.decode(res.body);
-    throw Exception("Error al cargar inventario");
+    throw Exception("Error en servidor: ${res.statusCode}");
   }
 
   // 3. Obtener Sucursales (Almacenes)
@@ -149,5 +161,43 @@ class TiendaService {
       debugPrint("No se pudo verificar URL remota: $e");
     }
     return null;
+  }
+
+  // Método centralizado para soporte vía WhatsApp
+  static Future<void> contactarSoporteWhatsApp(
+    String baseUrl, {
+    String? mensajePersonalizado,
+  }) async {
+    try {
+      // Reutilizamos la lógica de obtener el número desde la base de datos
+      final res = await http.get(Uri.parse('$baseUrl/api/config/soporte'));
+
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body);
+        String numeroSoporte =
+            data['telefono'] ??
+            data['TelSoporte'] ??
+            "529631320318"; // Respaldo por si acaso
+
+        // Limpiamos el número de caracteres no numéricos
+        numeroSoporte = numeroSoporte.replaceAll(RegExp(r'\D'), '');
+
+        // Aseguramos el código de país para México si no lo tiene
+        if (!numeroSoporte.startsWith('52')) numeroSoporte = '52$numeroSoporte';
+
+        String mensaje =
+            mensajePersonalizado ??
+            "Hola Factory Mayoreo, necesito ayuda con la App.";
+
+        final url =
+            "https://wa.me/$numeroSoporte?text=${Uri.encodeComponent(mensaje)}";
+
+        if (await canLaunchUrl(Uri.parse(url))) {
+          await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+        }
+      }
+    } catch (e) {
+      debugPrint("Error al contactar soporte: $e");
+    }
   }
 }

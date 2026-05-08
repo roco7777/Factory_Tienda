@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../services/tienda_service.dart'; // <--- Verifica que la ruta sea correcta
 
 bool _mostrarValidacionExtra =
     false; // Controla si aparece el campo de los 4 dígitos
@@ -101,40 +102,18 @@ class _RegistroScreenState extends State<RegistroScreen> {
   }
 
   // Fíjate cómo ahora aquí adentro de los paréntesis SÍ dice "String numeroSoporte"
-  Future<void> _contactarSoporte(String numeroSoporte) async {
-    // 1. EL DETECTOR DE MENTIRAS (Revisa tu consola de VS Code al presionar el botón)
-    print("===== ATENCIÓN =====");
-    print("Número que mandó el Servidor: $numeroSoporte");
-    print("Número que escribió el Cliente: ${_telController.text}");
-    print("====================");
-
-    // 2. EL SALVAVIDAS
-    // Si por alguna razón el servidor no mandó el número, usamos el tuyo a la fuerza
-    if (numeroSoporte.isEmpty ||
-        numeroSoporte == "null" ||
-        numeroSoporte == _telController.text) {
-      print("¡Alerta! El número venía mal. Usando el de respaldo.");
-      numeroSoporte =
-          "529631320318"; // <--- CAMBIA ESTO POR TU NÚMERO REAL DE PRUEBA
-    }
-
-    // 3. EL MENSAJE (Aquí sí va el teléfono del cliente para que tú sepas quién es)
+  void _contactarSoporte(String numeroSoporte) {
+    // 1. Preparamos el mensaje para el técnico
     String mensaje =
         "Hola Factory, mi nombre es ${_nombreController.text}. "
         "Tengo problemas para registrar mi número ${_telController.text}. ¿Podrían ayudarme?";
 
-    // 4. LA URL (Asegúrate de que dice $numeroSoporte)
-    final url =
-        "https://wa.me/$numeroSoporte?text=${Uri.encodeComponent(mensaje)}";
-
-    print("URL EXACTA ABRIR: $url");
-
-    // 5. ABRIR WHATSAPP
-    if (await canLaunchUrl(Uri.parse(url))) {
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-    } else {
-      _mostrarAlerta("No se pudo abrir WhatsApp");
-    }
+    // 2. Llamamos al servicio centralizado que ya tiene toda la lógica de abrir WhatsApp
+    // Esto evita que necesitemos las variables 'url' o 'canLaunchUrl' aquí dentro.
+    TiendaService.contactarSoporteWhatsApp(
+      widget.baseUrl,
+      mensajePersonalizado: mensaje,
+    );
   }
 
   // ========================================================

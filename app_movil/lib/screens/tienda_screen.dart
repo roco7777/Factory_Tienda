@@ -141,7 +141,11 @@ class _TiendaScreenState extends State<TiendaScreen> {
       );
 
       setState(() {
-        productos = data;
+        // Creamos una COPIA de la lista para poder barajarla sin restricciones
+        List<dynamic> copiaData = List.from(data);
+        copiaData.shuffle();
+
+        productos = copiaData;
         _paginaActual = 0;
         _hayMasProductos = data.length >= 10;
       });
@@ -417,31 +421,36 @@ class _TiendaScreenState extends State<TiendaScreen> {
     }
   }
 
-  Future<void> buscarProductos(String query) async {
+  Future<void> buscarProductos(String texto) async {
     if (!mounted) return;
+
     setState(() {
       cargando = true;
       _paginaActual = 0;
       productos = [];
     });
+
     try {
+      // Llamamos al servicio pasando ambos parámetros
+      // La lógica del server decidirá cuál usar
       final data = await TiendaService.fetchInventario(
         baseUrl: widget.baseUrl,
-        query: query,
+        query: texto,
+        categoria: categoriaSeleccionada,
         page: 0,
         idSuc: sucursalSeleccionada,
         seed: sessionSeed,
       );
+
       if (mounted) {
         setState(() {
           productos = data;
-          _hayMasProductos = data.length >= 10;
+          _hayMasProductos = data.length >= 12; // 12 es el limit del server
+          cargando = false;
         });
-        if (data.isNotEmpty) buscadorCtrl.clear();
       }
     } catch (e) {
-      debugPrint("Error búsqueda: $e");
-    } finally {
+      debugPrint("Error al buscar: $e");
       if (mounted) setState(() => cargando = false);
     }
   }
@@ -671,7 +680,7 @@ class _TiendaScreenState extends State<TiendaScreen> {
             scrollDirection: Axis.horizontal,
             children: [
               _buildCatItem("TODOS"),
-              ...categorias.map((c) => _buildCatItem(c['Descripcion'])),
+              ...categorias.map((c) => _buildCatItem(c)),
             ],
           ),
         ),
@@ -679,20 +688,34 @@ class _TiendaScreenState extends State<TiendaScreen> {
     );
   }
 
-  Widget _buildCatItem(String nombre) {
+  Widget _buildCatItem(dynamic cat) {
+    // 1. Identificamos si es el String manual "TODOS" o un objeto de la DB
+    String nombre = (cat is String) ? cat : cat['Descripcion'].toString();
     bool seleccionada = categoriaSeleccionada == nombre;
+
     return GestureDetector(
       onTap: () {
         if (mounted) {
-          setState(() => categoriaSeleccionada = nombre);
-          buscarProductos(nombre == "TODOS" ? "" : nombre);
+          setState(() {
+            categoriaSeleccionada = nombre;
+            buscadorCtrl.clear();
+            cargando = true;
+            productos = [];
+          });
+
+          // 2. LÓGICA CLAVE:
+          // Si el nombre es "TODOS", mandamos cadena vacía "" para que la API ignore el filtro.
+          // Si es cualquier otro, mandamos el nombre exacto de la categoría.
+          //String valorFiltro = (nombre == "TODOS") ? "" : nombre;
+
+          buscarProductos("");
         }
       },
       child: Container(
-        margin: const EdgeInsets.all(8),
-        padding: const EdgeInsets.symmetric(horizontal: 15),
+        margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
         decoration: BoxDecoration(
-          color: seleccionada ? Colors.white : Colors.white24,
+          color: seleccionada ? Colors.white : Colors.white.withOpacity(0.15),
           borderRadius: BorderRadius.circular(20),
         ),
         child: Center(
@@ -708,7 +731,6 @@ class _TiendaScreenState extends State<TiendaScreen> {
       ),
     );
   }
-
   // --- WIDGETS DE APOYO DE UI ---
 
   Widget _buildBotonCarrito() {
@@ -825,10 +847,13 @@ class _TiendaScreenState extends State<TiendaScreen> {
             ),
           const Divider(),
           ListTile(
-            leading: const Icon(Icons.help_outline),
+            leading: const Icon(Icons.help_outline, color: Colors.green),
             title: const Text("Soporte Técnico"),
+            subtitle: const Text("Chatea con nosotros por WhatsApp"),
             onTap: () {
-              // Aquí puedes poner tu lógica de WhatsApp si gustas
+              Navigator.pop(context); // Cerrar el drawer
+              // Llamamos al servicio centralizado
+              TiendaService.contactarSoporteWhatsApp(widget.baseUrl);
             },
           ),
           const Spacer(),
