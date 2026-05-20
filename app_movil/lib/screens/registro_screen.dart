@@ -4,12 +4,10 @@ import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
-import '../services/tienda_service.dart'; // <--- Verifica que la ruta sea correcta
+import '../services/tienda_service.dart';
 
-bool _mostrarValidacionExtra =
-    false; // Controla si aparece el campo de los 4 dígitos
+bool _mostrarValidacionExtra = false;
 
-// Formateador para forzar Mayúsculas
 class UpperCaseTextFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(
@@ -47,7 +45,6 @@ class RegistroScreen extends StatefulWidget {
 class _RegistroScreenState extends State<RegistroScreen> {
   final _formKey = GlobalKey<FormState>();
 
-  // Controladores
   final TextEditingController _telController = TextEditingController();
   final TextEditingController _otpController = TextEditingController();
   final TextEditingController _passController = TextEditingController();
@@ -58,22 +55,15 @@ class _RegistroScreenState extends State<RegistroScreen> {
   final TextEditingController _cpController = TextEditingController();
   final TextEditingController _ciudadController = TextEditingController();
   final TextEditingController _estadoController = TextEditingController();
-
-  // --- NUEVO CONTROLADOR PARA VALIDACIÓN ---
   final TextEditingController _ultimosCuatroController =
       TextEditingController();
 
-  // Variables de Estado
   PasoRegistro _pasoActual = PasoRegistro.pedirTelefono;
   bool _cargando = false;
   bool _verPassword = false;
   String _verificationId = "";
 
   final Color rojoFactory = const Color(0xFFD32F2F);
-
-  // ========================================================
-  // FUNCIONES DE SOPORTE Y ALERTAS
-  // ========================================================
 
   void _mostrarAlertaSeguridad(String msg, String telSoporte) {
     showDialog(
@@ -89,7 +79,6 @@ class _RegistroScreenState extends State<RegistroScreen> {
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-            // Aquí le "pasamos la estafeta" del número a la función de WhatsApp
             onPressed: () => _contactarSoporte(telSoporte),
             child: const Text(
               "WHATSAPP SOPORTE",
@@ -101,24 +90,16 @@ class _RegistroScreenState extends State<RegistroScreen> {
     );
   }
 
-  // Fíjate cómo ahora aquí adentro de los paréntesis SÍ dice "String numeroSoporte"
   void _contactarSoporte(String numeroSoporte) {
-    // 1. Preparamos el mensaje para el técnico
     String mensaje =
         "Hola Factory, mi nombre es ${_nombreController.text}. "
         "Tengo problemas para registrar mi número ${_telController.text}. ¿Podrían ayudarme?";
 
-    // 2. Llamamos al servicio centralizado que ya tiene toda la lógica de abrir WhatsApp
-    // Esto evita que necesitemos las variables 'url' o 'canLaunchUrl' aquí dentro.
     TiendaService.contactarSoporteWhatsApp(
       widget.baseUrl,
       mensajePersonalizado: mensaje,
     );
   }
-
-  // ========================================================
-  // LÓGICA DE PASOS Y API
-  // ========================================================
 
   Future<void> _verificarNumeroYEnviarSMS() async {
     String telefono = _telController.text.trim();
@@ -129,9 +110,8 @@ class _RegistroScreenState extends State<RegistroScreen> {
 
     setState(() {
       _cargando = true;
-      _mostrarValidacionExtra = false; // <--- APAGAMOS EL CUADRO AZUL
-      _ultimosCuatroController
-          .clear(); // <--- LIMPIAMOS LO QUE HAYA ESCRITO ANTES
+      _mostrarValidacionExtra = false;
+      _ultimosCuatroController.clear();
     });
 
     try {
@@ -209,27 +189,18 @@ class _RegistroScreenState extends State<RegistroScreen> {
         }),
       );
 
-      print("STATUS CODE: ${res.statusCode}");
-      print("BODY DEL SERVIDOR: ${res.body}");
-
       final data = json.decode(res.body);
 
       if (data['success'] == true) {
         _terminarExito(data['message'] ?? "¡Registro exitoso!");
       } else {
-        // --- ESTO ES LO QUE FALTABA: ACTIVAR EL CAMPO DINÁMICO ---
         if (data['requiereValidacion'] == true) {
           setState(() {
-            _mostrarValidacionExtra = true; // Activa el campo oculto
+            _mostrarValidacionExtra = true;
           });
           _mostrarAlerta(data['message'], color: Colors.blue);
-
-          // Opcional: Hacer scroll hacia abajo para que el usuario vea el nuevo campo
-        }
-        // --- ERRORES DE SEGURIDAD (Si ya falló la validación o está bloqueado) ---
-        else if (data['error'] == "VALIDACION_FALLIDA" ||
+        } else if (data['error'] == "VALIDACION_FALLIDA" ||
             data['error'] == "SEGURIDAD_BLOQUEO") {
-          // Extraemos el número dinámico (si no viene, usamos uno de respaldo)
           String telDinamico = data['telefonoSoporte'] ?? "529630000000";
           _mostrarAlertaSeguridad(data['message'], telDinamico);
         } else {
@@ -237,16 +208,11 @@ class _RegistroScreenState extends State<RegistroScreen> {
         }
       }
     } catch (e) {
-      debugPrint("DETALLE DEL ERROR: $e");
       _mostrarAlerta("Error de conexión: ${e.toString()}");
     } finally {
       if (mounted) setState(() => _cargando = false);
     }
   }
-
-  // ========================================================
-  // FIREBASE OTP Y VALIDACIONES (MANTENIDAS)
-  // ========================================================
 
   Future<void> _iniciarAutenticacionFirebase(PasoRegistro siguientePaso) async {
     String numeroConCodigo = "+52${_telController.text.trim()}";
@@ -344,9 +310,6 @@ class _RegistroScreenState extends State<RegistroScreen> {
     }
   }
 
-  // ========================================================
-  // INTERFAZ DE USUARIO
-  // ========================================================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -360,7 +323,7 @@ class _RegistroScreenState extends State<RegistroScreen> {
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(20),
-          child: _construirPantallaPorPaso(), // Llama al dibujante dinámico
+          child: _construirPantallaPorPaso(),
         ),
       ),
     );
@@ -381,7 +344,6 @@ class _RegistroScreenState extends State<RegistroScreen> {
           ),
           const SizedBox(height: 20),
 
-          // --- NOMBRE COMPLETO ---
           TextFormField(
             controller: _nombreController,
             textCapitalization: TextCapitalization.characters,
@@ -395,24 +357,40 @@ class _RegistroScreenState extends State<RegistroScreen> {
           ),
           const SizedBox(height: 15),
 
-          // --- EMAIL ---
           TextFormField(
             controller: _emailController,
+            maxLength: 50,
             decoration: const InputDecoration(
+              counterText: "", // <--- CORREGIDO AQUÍ
               labelText: "Correo Electrónico (Opcional)",
               prefixIcon: Icon(Icons.email),
               border: OutlineInputBorder(),
             ),
             keyboardType: TextInputType.emailAddress,
+            validator: (v) {
+              if (v != null && v.isNotEmpty) {
+                bool emailValido = RegExp(
+                  r"^[a-zA-Z0-9.a-zA-Z0-9.!#$%&'*+-/=?^_`{|}~]+@[a-zA-Z0-9]+\.[a-zA-Z]+",
+                ).hasMatch(v);
+                if (!emailValido) {
+                  return "Ingresa un correo electrónico válido";
+                }
+              }
+              return null;
+            },
           ),
           const SizedBox(height: 15),
 
-          // --- CONTRASEÑA ---
           TextFormField(
             controller: _passController,
             obscureText: !_verPassword,
+            maxLength: 10,
             decoration: InputDecoration(
+              counterText: "", // <--- CORREGIDO AQUÍ
               labelText: "Crea una Contraseña",
+              helperText:
+                  "Máx. 10 caracteres alfanuméricos. Acepta mayúsculas, minúsculas y caracteres especiales.",
+              helperMaxLines: 2,
               prefixIcon: const Icon(Icons.lock),
               border: const OutlineInputBorder(),
               suffixIcon: IconButton(
@@ -433,7 +411,6 @@ class _RegistroScreenState extends State<RegistroScreen> {
           ),
           const SizedBox(height: 10),
 
-          // --- CALLE ---
           TextFormField(
             controller: _calleController,
             textCapitalization: TextCapitalization.characters,
@@ -446,7 +423,6 @@ class _RegistroScreenState extends State<RegistroScreen> {
           ),
           const SizedBox(height: 10),
 
-          // --- BARRIO ---
           TextFormField(
             controller: _barrioController,
             textCapitalization: TextCapitalization.characters,
@@ -461,7 +437,6 @@ class _RegistroScreenState extends State<RegistroScreen> {
 
           Row(
             children: [
-              // --- CIUDAD ---
               Expanded(
                 flex: 2,
                 child: TextFormField(
@@ -476,7 +451,6 @@ class _RegistroScreenState extends State<RegistroScreen> {
                 ),
               ),
               const SizedBox(width: 10),
-              // --- C.P. ---
               Expanded(
                 flex: 1,
                 child: TextFormField(
@@ -493,7 +467,6 @@ class _RegistroScreenState extends State<RegistroScreen> {
           ),
           const SizedBox(height: 10),
 
-          // --- ESTADO ---
           TextFormField(
             controller: _estadoController,
             textCapitalization: TextCapitalization.characters,
@@ -505,9 +478,6 @@ class _RegistroScreenState extends State<RegistroScreen> {
             validator: (v) => v!.isEmpty ? "Requerido" : null,
           ),
 
-          // =====================================================================
-          // SECCIÓN DINÁMICA: Solo aparece si el sistema detecta un conflicto
-          // =====================================================================
           if (_mostrarValidacionExtra) ...[
             const SizedBox(height: 20),
             Container(
@@ -536,6 +506,7 @@ class _RegistroScreenState extends State<RegistroScreen> {
                     maxLength: 4,
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(
+                      counterText: "", // <--- CORREGIDO AQUÍ
                       border: OutlineInputBorder(),
                       fillColor: Colors.white,
                       filled: true,
@@ -545,7 +516,6 @@ class _RegistroScreenState extends State<RegistroScreen> {
               ),
             ),
           ],
-          // =====================================================================
           const SizedBox(height: 30),
 
           _cargando
@@ -573,8 +543,6 @@ class _RegistroScreenState extends State<RegistroScreen> {
     );
   }
 
-  // --- RESTO DE WIDGETS (MANTENIDOS) ---
-
   Widget _buildPasoTelefono() {
     return Column(
       children: [
@@ -593,6 +561,7 @@ class _RegistroScreenState extends State<RegistroScreen> {
           keyboardType: TextInputType.phone,
           maxLength: 10,
           decoration: const InputDecoration(
+            counterText: "", // <--- CORREGIDO AQUÍ
             labelText: "Teléfono a 10 dígitos",
             prefixText: "+52 ",
             border: OutlineInputBorder(),
@@ -640,7 +609,10 @@ class _RegistroScreenState extends State<RegistroScreen> {
             letterSpacing: 5,
             fontWeight: FontWeight.bold,
           ),
-          decoration: const InputDecoration(border: OutlineInputBorder()),
+          decoration: const InputDecoration(
+            counterText: "", // <--- CORREGIDO AQUÍ
+            border: OutlineInputBorder(),
+          ),
         ),
         const SizedBox(height: 20),
         _cargando
@@ -693,8 +665,13 @@ class _RegistroScreenState extends State<RegistroScreen> {
         TextField(
           controller: _passController,
           obscureText: !_verPassword,
+          maxLength: 10,
           decoration: InputDecoration(
+            counterText: "", // <--- CORREGIDO AQUÍ
             labelText: "Contraseña",
+            helperText:
+                "Máx. 10 caracteres alfanuméricos. Acepta mayúsculas, minúsculas y caracteres especiales.",
+            helperMaxLines: 2,
             prefixIcon: const Icon(Icons.lock),
             border: const OutlineInputBorder(),
             suffixIcon: IconButton(

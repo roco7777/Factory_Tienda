@@ -1,6 +1,6 @@
 {
-    "name": "app_movil",
-    "short_name": "app_movil",
+    "name": "Factory Mayoreo",
+    "short_name": "Factory",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

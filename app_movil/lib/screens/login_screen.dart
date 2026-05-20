@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'registro_screen.dart';
 import 'tienda_screen.dart';
 
-bool _verPassword = false; // Por defecto la contraseña está oculta
+bool _verPassword = false;
 
 class LoginScreen extends StatefulWidget {
   final String baseUrl;
@@ -25,6 +26,11 @@ class _LoginScreenState extends State<LoginScreen> {
     if (_telController.text.trim().isEmpty ||
         _passController.text.trim().isEmpty) {
       _mostrarError("Por favor, llena todos los campos");
+      return;
+    }
+
+    if (_telController.text.trim().length != 10) {
+      _mostrarError("El teléfono debe tener exactamente 10 dígitos");
       return;
     }
 
@@ -99,7 +105,10 @@ class _LoginScreenState extends State<LoginScreen> {
             TextFormField(
               controller: _telController,
               keyboardType: TextInputType.phone,
+              maxLength: 10,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               decoration: InputDecoration(
+                counterText: "", // <--- CORREGIDO AQUÍ
                 labelText: "Teléfono de 10 dígitos",
                 prefixIcon: Icon(Icons.phone_android, color: rojoFactory),
                 border: OutlineInputBorder(
@@ -110,20 +119,19 @@ class _LoginScreenState extends State<LoginScreen> {
             const SizedBox(height: 20),
             TextFormField(
               controller: _passController,
-              obscureText:
-                  !_verPassword, // Si _verPassword es falso, oculta el texto
+              obscureText: !_verPassword,
+              maxLength: 10,
               decoration: InputDecoration(
+                counterText: "", // <--- CORREGIDO AQUÍ
                 labelText: "Contraseña",
                 prefixIcon: const Icon(Icons.lock),
                 border: const OutlineInputBorder(),
-                // --- AQUÍ AGREGAMOS EL OJITO ---
                 suffixIcon: IconButton(
                   icon: Icon(
                     _verPassword ? Icons.visibility : Icons.visibility_off,
                     color: Colors.grey,
                   ),
                   onPressed: () {
-                    // Al presionar, cambiamos el estado y Flutter redibuja el campo
                     setState(() {
                       _verPassword = !_verPassword;
                     });
@@ -131,13 +139,13 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
               validator: (value) {
-                if (value == null || value.isEmpty)
+                if (value == null || value.isEmpty) {
                   return "Ingresa tu contraseña";
+                }
                 return null;
               },
             ),
 
-            // --- NUEVO: BOTÓN OLVIDÉ MI CONTRASEÑA ---
             Align(
               alignment: Alignment.centerRight,
               child: TextButton(
@@ -147,8 +155,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     MaterialPageRoute(
                       builder: (context) => RegistroScreen(
                         baseUrl: widget.baseUrl,
-                        esRecuperacion:
-                            true, // Avisamos que es para recuperar clave
+                        esRecuperacion: true,
                       ),
                     ),
                   );

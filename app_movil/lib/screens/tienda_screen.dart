@@ -133,7 +133,8 @@ class _TiendaScreenState extends State<TiendaScreen> {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() {
-      String nombreCompleto = prefs.getString('cliente_nombre') ?? "Invitado";
+      // Como ya no hay invitados, el fallback es "Cliente"
+      String nombreCompleto = prefs.getString('cliente_nombre') ?? "Cliente";
       nombreCliente = nombreCompleto.split(' ')[0];
     });
   }
@@ -504,17 +505,24 @@ class _TiendaScreenState extends State<TiendaScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text("NO"),
+            child: const Text("SEGUIR COMPRANDO"),
           ),
           TextButton(
             onPressed: () async {
               final prefs = await SharedPreferences.getInstance();
               await prefs.remove('cliente_id');
               await prefs.remove('cliente_nombre');
+
               if (mounted) {
-                Navigator.pop(context);
-                setState(() => nombreCliente = "Invitado");
-                _cargarSesion();
+                // Aquí cerramos la sesión y mandamos directo al LoginScreen
+                // pushAndRemoveUntil destruye el historial para no poder regresar atrás
+                Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => LoginScreen(baseUrl: widget.baseUrl),
+                  ),
+                  (route) => false,
+                );
               }
             },
             child: const Text(
@@ -562,9 +570,7 @@ class _TiendaScreenState extends State<TiendaScreen> {
                 ],
               ),
               Text(
-                (nombreCliente == null || nombreCliente == "Invitado")
-                    ? "Hola invitado"
-                    : "Hola, $nombreCliente",
+                "Hola, ${nombreCliente ?? 'Cliente'}", // Eliminado el if de invitado
                 style: const TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
@@ -804,31 +810,17 @@ class _TiendaScreenState extends State<TiendaScreen> {
     );
   }
 
+  // --- BOTÓN DE SALIDA LIMPIO ---
   Widget _buildBotonLoginOut() {
     return IconButton(
-      icon: Icon(
-        (nombreCliente == null || nombreCliente == "Invitado")
-            ? Icons.account_circle_outlined
-            : Icons.exit_to_app,
-        size: 26,
-      ),
+      icon: const Icon(Icons.exit_to_app, size: 26),
       onPressed: () {
-        if (nombreCliente == null || nombreCliente == "Invitado") {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => LoginScreen(baseUrl: widget.baseUrl),
-            ),
-          ).then((_) {
-            if (mounted) _cargarSesion();
-          });
-        } else {
-          _mostrarDialogoCerrarSesion();
-        }
+        _mostrarDialogoCerrarSesion();
       },
     );
   }
 
+  // --- DRAWER LIMPIO (Sin Invitado) ---
   Widget _buildDrawer() {
     return Drawer(
       child: Column(
@@ -840,37 +832,30 @@ class _TiendaScreenState extends State<TiendaScreen> {
               child: Icon(Icons.person, size: 40, color: Color(0xFFD32F2F)),
             ),
             accountName: Text(
-              (nombreCliente == null || nombreCliente == "Invitado")
-                  ? "Bienvenido"
-                  : "Hola, $nombreCliente",
+              "Hola, ${nombreCliente ?? 'Cliente'}",
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
-            accountEmail: Text(
-              (nombreCliente == null || nombreCliente == "Invitado")
-                  ? "Inicia sesión para pedir"
-                  : "Cliente Factory",
-            ),
+            accountEmail: const Text("Cliente Factory"),
           ),
           ListTile(
             leading: const Icon(Icons.home),
             title: const Text("Inicio / Tienda"),
             onTap: () => Navigator.pop(context),
           ),
-          if (nombreCliente != null && nombreCliente != "Invitado")
-            ListTile(
-              leading: const Icon(Icons.person_outline),
-              title: const Text("Mi Perfil"),
-              subtitle: const Text("Configura tus datos de envío"),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => PerfilScreen(baseUrl: widget.baseUrl),
-                  ),
-                );
-              },
-            ),
+          ListTile(
+            leading: const Icon(Icons.person_outline),
+            title: const Text("Mi Perfil"),
+            subtitle: const Text("Configura tus datos de envío"),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => PerfilScreen(baseUrl: widget.baseUrl),
+                ),
+              );
+            },
+          ),
           const Divider(),
           ListTile(
             leading: const Icon(Icons.help_outline, color: Colors.green),
@@ -882,18 +867,17 @@ class _TiendaScreenState extends State<TiendaScreen> {
             },
           ),
           const Spacer(),
-          if (nombreCliente != null && nombreCliente != "Invitado")
-            ListTile(
-              leading: const Icon(Icons.logout, color: Colors.red),
-              title: const Text(
-                "Cerrar Sesión",
-                style: TextStyle(color: Colors.red),
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                _mostrarDialogoCerrarSesion();
-              },
+          ListTile(
+            leading: const Icon(Icons.logout, color: Colors.red),
+            title: const Text(
+              "Cerrar Sesión",
+              style: TextStyle(color: Colors.red),
             ),
+            onTap: () {
+              Navigator.pop(context);
+              _mostrarDialogoCerrarSesion();
+            },
+          ),
           const SizedBox(height: 20),
         ],
       ),
