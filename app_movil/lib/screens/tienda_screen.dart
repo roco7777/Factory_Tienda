@@ -11,9 +11,7 @@ import '../widgets/tienda_modals.dart';
 import '../services/tienda_service.dart';
 import 'perfil_screen.dart';
 import 'package:http/http.dart' as http;
-import 'package:marquee/marquee.dart'; // <--- El nuevo import
-
-// NOTA: Se eliminaron los imports de Admin e Inventario
+import 'package:marquee/marquee.dart';
 
 class TiendaScreen extends StatefulWidget {
   final String baseUrl;
@@ -32,11 +30,10 @@ class _TiendaScreenState extends State<TiendaScreen> {
   String? nombreCliente;
 
   String? mensajeAviso;
-  Color colorFondoAviso = const Color(0xFFFFF176); // Amarillo por defecto
-  // Eliminamos rolAdmin porque el cliente nunca es admin
+  Color colorFondoAviso = const Color(0xFFFFF176);
   String nombreSucursal = "Sucursal";
   String categoriaSeleccionada = "TODOS";
-  bool cargando = false;
+  bool cargando = true;
   int totalItemsCarrito = 0;
   int sucursalSeleccionada = 1;
 
@@ -48,6 +45,7 @@ class _TiendaScreenState extends State<TiendaScreen> {
   }
 
   final ScrollController _scrollController = ScrollController();
+  final ScrollController _catScrollController = ScrollController();
   int _paginaActual = 0;
   bool _cargandoMas = false;
   bool _hayMasProductos = true;
@@ -59,10 +57,14 @@ class _TiendaScreenState extends State<TiendaScreen> {
   @override
   void initState() {
     super.initState();
-    _cargarAvisoImportante();
-    _cargarSesion();
-    _cargarSucursales();
-    _actualizarContadorCarrito();
+    _cargarCache();
+
+    if (productos.isEmpty) {
+      _cargarAvisoImportante();
+      _cargarSesion();
+      _cargarSucursales();
+      _actualizarContadorCarrito();
+    }
 
     _scrollController.addListener(() {
       if (_scrollController.position.pixels >=
@@ -77,9 +79,29 @@ class _TiendaScreenState extends State<TiendaScreen> {
   @override
   void dispose() {
     _scrollController.dispose();
+    _catScrollController.dispose();
     buscadorCtrl.dispose();
     _audioPlayer.dispose();
     super.dispose();
+  }
+
+  // --- LÓGICA DE RESET ---
+  void _resetearAlInicio() {
+    setState(() {
+      categoriaSeleccionada = "TODOS";
+      buscadorCtrl.clear();
+      cargando = true;
+      productos = [];
+    });
+
+    if (_catScrollController.hasClients) {
+      _catScrollController.animateTo(
+        0.0,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
+    buscarProductos("");
   }
 
   // --- MÉTODOS DE DATOS Y SESIÓN ---
@@ -113,15 +135,15 @@ class _TiendaScreenState extends State<TiendaScreen> {
     setState(() {
       String nombreCompleto = prefs.getString('cliente_nombre') ?? "Invitado";
       nombreCliente = nombreCompleto.split(' ')[0];
-      // Ya no cargamos rol de admin aquí
     });
   }
 
   Future<void> _cargarDatosIniciales() async {
     _cargarAvisoImportante();
 
-    if (cargando || !mounted) return;
-    setState(() => cargando = true);
+    if (!mounted) return;
+
+    if (productos.isEmpty) setState(() => cargando = true);
 
     try {
       if (categorias.isEmpty) {
@@ -140,40 +162,33 @@ class _TiendaScreenState extends State<TiendaScreen> {
         seed: sessionSeed,
       );
 
-      setState(() {
-        // Creamos una COPIA de la lista para poder barajarla sin restricciones
-        List<dynamic> copiaData = List.from(data);
-        copiaData.shuffle();
+      if (mounted) {
+        setState(() {
+          List<dynamic> copiaData = List.from(data);
+          copiaData.shuffle();
+          productos = copiaData;
+          _paginaActual = 0;
+          _hayMasProductos = data.length >= 10;
+          cargando = false;
+        });
+        _guardarCache(data);
+      }
 
-        productos = copiaData;
-        _paginaActual = 0;
-        _hayMasProductos = data.length >= 10;
-      });
-
-      //for (var prod in data) {
-      // if (prod['Foto'] != null && prod['Foto'] != "" && mounted) {
-      // precacheImage(
-      // NetworkImage('${widget.baseUrl}/uploads/${prod['Foto']}'),
-      //context,
-      //);
       for (var prod in data) {
-        // Cambiamos la lógica para usar el drive_id
         String driveId =
             (prod['drive_id'] ?? prod['DriveID'])?.toString() ?? '';
-
         if (driveId.isNotEmpty && mounted) {
           precacheImage(
-            NetworkImage(
-              TiendaService.getImagenUrl(driveId),
-            ), // <-- USA LA NUEVA URL
+            NetworkImage(TiendaService.getImagenUrl(driveId)),
             context,
           );
         }
       }
     } catch (e) {
       debugPrint("Error cargando datos: $e");
-    } finally {
-      if (mounted) setState(() => cargando = false);
+      if (mounted) {
+        setState(() => cargando = false);
+      }
     }
   }
 
@@ -427,12 +442,9 @@ class _TiendaScreenState extends State<TiendaScreen> {
     setState(() {
       cargando = true;
       _paginaActual = 0;
-      productos = [];
     });
 
     try {
-      // Llamamos al servicio pasando ambos parámetros
-      // La lógica del server decidirá cuál usar
       final data = await TiendaService.fetchInventario(
         baseUrl: widget.baseUrl,
         query: texto,
@@ -445,7 +457,7 @@ class _TiendaScreenState extends State<TiendaScreen> {
       if (mounted) {
         setState(() {
           productos = data;
-          _hayMasProductos = data.length >= 12; // 12 es el limit del server
+          _hayMasProductos = data.length >= 12;
           cargando = false;
         });
       }
@@ -517,108 +529,117 @@ class _TiendaScreenState extends State<TiendaScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      // --- MODIFICACIÓN CLAVE: DRAWER ELIMINADO ---
-      drawer: _buildDrawer(),
+    bool esInicio =
+        (categoriaSeleccionada == "TODOS" && buscadorCtrl.text.isEmpty);
 
-      appBar: AppBar(
-        backgroundColor: rojoFactory,
-        foregroundColor: Colors.white,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // --- MODIFICACIÓN CLAVE: Título simple, sin GestureDetector secreto ---
-            const Text(
-              "Factory Mayoreo",
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
-            ),
-            Row(
-              children: [
-                const Icon(Icons.storefront, size: 12, color: Colors.white70),
-                const SizedBox(width: 4),
-                Text(
-                  nombreSucursal,
-                  style: const TextStyle(fontSize: 10, color: Colors.white70),
+    return PopScope(
+      canPop: esInicio,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        _resetearAlInicio();
+      },
+      child: Scaffold(
+        backgroundColor: Colors.white,
+        drawer: _buildDrawer(),
+        appBar: AppBar(
+          backgroundColor: rojoFactory,
+          foregroundColor: Colors.white,
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "Factory Mayoreo",
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
+              ),
+              Row(
+                children: [
+                  const Icon(Icons.storefront, size: 12, color: Colors.white70),
+                  const SizedBox(width: 4),
+                  Text(
+                    nombreSucursal,
+                    style: const TextStyle(fontSize: 10, color: Colors.white70),
+                  ),
+                ],
+              ),
+              Text(
+                (nombreCliente == null || nombreCliente == "Invitado")
+                    ? "Hola invitado"
+                    : "Hola, $nombreCliente",
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
                 ),
-              ],
-            ),
-            Text(
-              (nombreCliente == null || nombreCliente == "Invitado")
-                  ? "Hola invitado"
-                  : "Hola, $nombreCliente",
-              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-            ),
+              ),
+            ],
+          ),
+          actions: [
+            _buildBotonCarrito(),
+            if (sucursales.isNotEmpty)
+              IconButton(
+                icon: const Icon(Icons.location_on, size: 22),
+                onPressed: _mostrarModalSucursales,
+              ),
+            _buildBotonLoginOut(),
           ],
-        ),
-        actions: [
-          _buildBotonCarrito(),
-          if (sucursales.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.location_on, size: 22),
-              onPressed: _mostrarModalSucursales,
+          bottom: PreferredSize(
+            preferredSize: Size.fromHeight(mensajeAviso != null ? 130 : 95),
+            child: Column(
+              children: [_buildBuscadorYCategorias(), _buildCintilloAvisos()],
             ),
-          _buildBotonLoginOut(),
-        ],
-        bottom: PreferredSize(
-          // Si hay aviso, sumamos 35 píxeles a la altura
-          preferredSize: Size.fromHeight(mensajeAviso != null ? 130 : 95),
-          child: Column(
-            children: [_buildBuscadorYCategorias(), _buildCintilloAvisos()],
           ),
         ),
-      ),
-      body: SafeArea(
-        bottom: true,
-        top: false,
-        child: Column(
-          children: [
-            Expanded(
-              child: cargando && productos.isEmpty
-                  ? const Center(child: CircularProgressIndicator())
-                  : productos.isEmpty
-                  ? const Center(child: Text("Sin stock en este almacén"))
-                  : GridView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.only(
-                        left: 8,
-                        right: 8,
-                        top: 8,
-                        bottom: 20,
-                      ),
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 2,
-                            childAspectRatio: 0.55,
-                            crossAxisSpacing: 8,
-                            mainAxisSpacing: 8,
-                          ),
-                      itemCount: productos.length,
-                      itemBuilder: (context, index) {
-                        final item = productos[index];
-                        return ProductCard(
-                          item: item,
-                          baseUrl: widget.baseUrl,
-                          onTap: () => _mostrarFichaProducto(item),
-                          onAgregar: () => _mostrarSelectorCantidad(item),
-                        );
-                      },
-                    ),
-            ),
-          ],
+        body: SafeArea(
+          bottom: true,
+          top: false,
+          child: Column(
+            children: [
+              Expanded(
+                child: cargando
+                    ? const Center(child: CircularProgressIndicator())
+                    : (productos.isEmpty
+                          ? const Center(
+                              child: Text("Sin stock en este almacén"),
+                            )
+                          : GridView.builder(
+                              controller: _scrollController,
+                              padding: const EdgeInsets.only(
+                                left: 8,
+                                right: 8,
+                                top: 8,
+                                bottom: 20,
+                              ),
+                              gridDelegate:
+                                  const SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: 2,
+                                    childAspectRatio: 0.55,
+                                    crossAxisSpacing: 8,
+                                    mainAxisSpacing: 8,
+                                  ),
+                              itemCount: productos.length,
+                              itemBuilder: (context, index) {
+                                final item = productos[index];
+                                return ProductCard(
+                                  item: item,
+                                  baseUrl: widget.baseUrl,
+                                  onTap: () => _mostrarFichaProducto(item),
+                                  onAgregar: () =>
+                                      _mostrarSelectorCantidad(item),
+                                );
+                              },
+                            )),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  // --- WIDGETS DE APOYO DE UI ---
-  // (Sin cambios mayores, solo cosméticos si aplicaba)
-
   Widget _buildCintilloAvisos() {
     if (mensajeAviso == null) return const SizedBox.shrink();
 
     return Container(
-      height: 35, // Altura fija y elegante
+      height: 35,
       width: double.infinity,
       color: colorFondoAviso,
       child: Marquee(
@@ -630,8 +651,8 @@ class _TiendaScreenState extends State<TiendaScreen> {
         ),
         scrollAxis: Axis.horizontal,
         crossAxisAlignment: CrossAxisAlignment.center,
-        blankSpace: 100.0, // Espacio entre el fin y el inicio del texto
-        velocity: 50.0, // Velocidad de desplazamiento
+        blankSpace: 100.0,
+        velocity: 50.0,
         pauseAfterRound: const Duration(seconds: 1),
         accelerationDuration: const Duration(seconds: 1),
         accelerationCurve: Curves.linear,
@@ -659,6 +680,18 @@ class _TiendaScreenState extends State<TiendaScreen> {
                   size: 20,
                   color: Colors.grey,
                 ),
+                suffixIcon: buscadorCtrl.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(
+                          Icons.clear,
+                          size: 20,
+                          color: Colors.grey,
+                        ),
+                        onPressed: () {
+                          _resetearAlInicio();
+                        },
+                      )
+                    : null,
                 fillColor: Colors.white,
                 filled: true,
                 contentPadding: const EdgeInsets.symmetric(
@@ -671,12 +704,14 @@ class _TiendaScreenState extends State<TiendaScreen> {
                 ),
               ),
               onSubmitted: (val) => buscarProductos(val),
+              onChanged: (val) => setState(() {}),
             ),
           ),
         ),
         SizedBox(
           height: 40,
           child: ListView(
+            controller: _catScrollController,
             scrollDirection: Axis.horizontal,
             children: [
               _buildCatItem("TODOS"),
@@ -689,7 +724,6 @@ class _TiendaScreenState extends State<TiendaScreen> {
   }
 
   Widget _buildCatItem(dynamic cat) {
-    // 1. Identificamos si es el String manual "TODOS" o un objeto de la DB
     String nombre = (cat is String) ? cat : cat['Descripcion'].toString();
     bool seleccionada = categoriaSeleccionada == nombre;
 
@@ -702,11 +736,6 @@ class _TiendaScreenState extends State<TiendaScreen> {
             cargando = true;
             productos = [];
           });
-
-          // 2. LÓGICA CLAVE:
-          // Si el nombre es "TODOS", mandamos cadena vacía "" para que la API ignore el filtro.
-          // Si es cualquier otro, mandamos el nombre exacto de la categoría.
-          //String valorFiltro = (nombre == "TODOS") ? "" : nombre;
 
           buscarProductos("");
         }
@@ -731,7 +760,6 @@ class _TiendaScreenState extends State<TiendaScreen> {
       ),
     );
   }
-  // --- WIDGETS DE APOYO DE UI ---
 
   Widget _buildBotonCarrito() {
     return Stack(
@@ -801,7 +829,6 @@ class _TiendaScreenState extends State<TiendaScreen> {
     );
   }
 
-  // --- NUEVO DRAWER ---
   Widget _buildDrawer() {
     return Drawer(
       child: Column(
@@ -829,14 +856,13 @@ class _TiendaScreenState extends State<TiendaScreen> {
             title: const Text("Inicio / Tienda"),
             onTap: () => Navigator.pop(context),
           ),
-          // Solo se muestra si NO es invitado
           if (nombreCliente != null && nombreCliente != "Invitado")
             ListTile(
               leading: const Icon(Icons.person_outline),
               title: const Text("Mi Perfil"),
               subtitle: const Text("Configura tus datos de envío"),
               onTap: () {
-                Navigator.pop(context); // Cerrar menú
+                Navigator.pop(context);
                 Navigator.push(
                   context,
                   MaterialPageRoute(
@@ -851,8 +877,7 @@ class _TiendaScreenState extends State<TiendaScreen> {
             title: const Text("Soporte Técnico"),
             subtitle: const Text("Chatea con nosotros por WhatsApp"),
             onTap: () {
-              Navigator.pop(context); // Cerrar el drawer
-              // Llamamos al servicio centralizado
+              Navigator.pop(context);
               TiendaService.contactarSoporteWhatsApp(widget.baseUrl);
             },
           ),
@@ -874,4 +899,22 @@ class _TiendaScreenState extends State<TiendaScreen> {
       ),
     );
   }
-} // <--- FINAL DE LA CLASE
+
+  // --- MÉTODOS DE CACHÉ ---
+  Future<void> _guardarCache(List<dynamic> data) async {
+    final prefs = await SharedPreferences.getInstance();
+    String jsonString = jsonEncode(data);
+    await prefs.setString('cache_productos', jsonString);
+  }
+
+  Future<void> _cargarCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    String? jsonString = prefs.getString('cache_productos');
+    if (jsonString != null && mounted) {
+      setState(() {
+        productos = jsonDecode(jsonString);
+        cargando = false;
+      });
+    }
+  }
+}
