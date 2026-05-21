@@ -530,7 +530,9 @@ class _CarritoScreenState extends State<CarritoScreen> {
       context,
       MaterialPageRoute(
         builder: (context) => DetalleProductoScreen(
-          item: item,
+          productos: [item], // <-- Lo envolvemos en una lista (corchetes)
+          initialIndex:
+              0, // <-- Le decimos que muestre el elemento 0 (el único que hay)
           baseUrl: widget.baseUrl,
           onAgregarTap: (itemParaAgregar) {
             int currentQty = (int.tryParse(item['qty'].toString()) ?? 1);

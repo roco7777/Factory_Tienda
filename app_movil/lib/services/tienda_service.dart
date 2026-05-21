@@ -163,6 +163,23 @@ class TiendaService {
     return null;
   }
 
+  //consultar las redes sociales
+  static Future<List<dynamic>> fetchRedesSociales(String baseUrl) async {
+    try {
+      final response = await http.get(Uri.parse('$baseUrl/api/social-media'));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true) {
+          return data['data'];
+        }
+      }
+      return [];
+    } catch (e) {
+      debugPrint("Error redes sociales: $e");
+      return [];
+    }
+  }
+
   // Método centralizado para soporte vía WhatsApp
   static Future<void> contactarSoporteWhatsApp(
     String baseUrl, {

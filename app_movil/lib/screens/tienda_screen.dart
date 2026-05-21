@@ -12,6 +12,8 @@ import '../services/tienda_service.dart';
 import 'perfil_screen.dart';
 import 'package:http/http.dart' as http;
 import 'package:marquee/marquee.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 class TiendaScreen extends StatefulWidget {
   final String baseUrl;
@@ -26,6 +28,7 @@ class _TiendaScreenState extends State<TiendaScreen> {
   List<dynamic> productos = [];
   List<dynamic> categorias = [];
   List<dynamic> sucursales = [];
+  List<dynamic> redesSociales = [];
   dynamic sucursalActual;
   String? nombreCliente;
 
@@ -139,8 +142,21 @@ class _TiendaScreenState extends State<TiendaScreen> {
     });
   }
 
+  Future<void> _abrirRedSocial(String urlString) async {
+    if (urlString.isEmpty || urlString == '#') return;
+
+    final Uri url = Uri.parse(urlString);
+    if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+      debugPrint("No se pudo abrir $url");
+    }
+  }
+
   Future<void> _cargarDatosIniciales() async {
     _cargarAvisoImportante();
+
+    TiendaService.fetchRedesSociales(widget.baseUrl).then((redes) {
+      if (mounted) setState(() => redesSociales = redes);
+    });
 
     if (!mounted) return;
 
@@ -259,12 +275,14 @@ class _TiendaScreenState extends State<TiendaScreen> {
     );
   }
 
-  void _mostrarFichaProducto(dynamic item) {
+  void _mostrarFichaProducto(int index) {
+    // <-- Ahora recibe el index (la posición)
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => DetalleProductoScreen(
-          item: item,
+          productos: productos, // <-- Le pasamos toda la lista de la tienda
+          initialIndex: index, // <-- Le decimos en qué producto empezar
           baseUrl: widget.baseUrl,
           onAgregarTap: (prod) => _mostrarSelectorCantidad(prod),
         ),
@@ -552,41 +570,62 @@ class _TiendaScreenState extends State<TiendaScreen> {
         appBar: AppBar(
           backgroundColor: rojoFactory,
           foregroundColor: Colors.white,
+          titleSpacing: 15,
           title: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // 1. TÍTULO LIMPIO (Sin el saludo para evitar el overflow)
               const Text(
                 "Factory Mayoreo",
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 19),
               ),
-              Row(
-                children: [
-                  const Icon(Icons.storefront, size: 12, color: Colors.white70),
-                  const SizedBox(width: 4),
-                  Text(
-                    nombreSucursal,
-                    style: const TextStyle(fontSize: 10, color: Colors.white70),
+
+              const SizedBox(height: 6),
+
+              // 2. BADGE DE ALMACÉN INTERACTIVO
+              GestureDetector(
+                onTap: _mostrarModalSucursales,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
                   ),
-                ],
-              ),
-              Text(
-                "Hola, ${nombreCliente ?? 'Cliente'}", // Eliminado el if de invitado
-                style: const TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.25),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.white30, width: 1),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.location_on,
+                        size: 14,
+                        color: Colors.yellowAccent,
+                      ),
+                      const SizedBox(width: 5),
+                      Text(
+                        "ALMACÉN: ${nombreSucursal.toUpperCase()}",
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                      const SizedBox(width: 5),
+                      const Icon(
+                        Icons.keyboard_arrow_down,
+                        size: 16,
+                        color: Colors.white70,
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
           ),
-          actions: [
-            _buildBotonCarrito(),
-            if (sucursales.isNotEmpty)
-              IconButton(
-                icon: const Icon(Icons.location_on, size: 22),
-                onPressed: _mostrarModalSucursales,
-              ),
-            _buildBotonLoginOut(),
-          ],
+          actions: [_buildBotonCarrito(), _buildBotonLoginOut()],
           bottom: PreferredSize(
             preferredSize: Size.fromHeight(mensajeAviso != null ? 130 : 95),
             child: Column(
@@ -627,7 +666,7 @@ class _TiendaScreenState extends State<TiendaScreen> {
                                 return ProductCard(
                                   item: item,
                                   baseUrl: widget.baseUrl,
-                                  onTap: () => _mostrarFichaProducto(item),
+                                  onTap: () => _mostrarFichaProducto(index),
                                   onAgregar: () =>
                                       _mostrarSelectorCantidad(item),
                                 );
@@ -866,6 +905,55 @@ class _TiendaScreenState extends State<TiendaScreen> {
               TiendaService.contactarSoporteWhatsApp(widget.baseUrl);
             },
           ),
+          if (redesSociales.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: redesSociales.map((red) {
+                  String nombre = red['Nombre'].toString().toLowerCase();
+                  String url = red['url'].toString();
+
+                  // 1. Creamos el Widget completo por defecto (para enlaces genéricos)
+                  Widget iconoRedSocial = const FaIcon(
+                    FontAwesomeIcons.link,
+                    color: Colors.grey,
+                    size: 30,
+                  );
+
+                  // 2. Reemplazamos el Widget completo si coincide con la red
+                  if (nombre.contains('facebook')) {
+                    iconoRedSocial = const FaIcon(
+                      FontAwesomeIcons.facebook,
+                      color: Color(0xFF1877F2),
+                      size: 30,
+                    );
+                  } else if (nombre.contains('instagram')) {
+                    iconoRedSocial = const FaIcon(
+                      FontAwesomeIcons.instagram,
+                      color: Color(0xFFE4405F),
+                      size: 30,
+                    );
+                  } else if (nombre.contains('tiktok')) {
+                    iconoRedSocial = const FaIcon(
+                      FontAwesomeIcons.tiktok,
+                      color: Colors.black,
+                      size: 30,
+                    );
+                  }
+
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12.0),
+                    child: IconButton(
+                      icon:
+                          iconoRedSocial, // <-- Pasamos el widget directamente
+                      onPressed: () => _abrirRedSocial(url),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          const Spacer(),
           const Spacer(),
           ListTile(
             leading: const Icon(Icons.logout, color: Colors.red),
