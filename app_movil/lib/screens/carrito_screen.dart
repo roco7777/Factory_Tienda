@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart'; // <--- IMPORTANTE: Agrega esto
+import 'package:url_launcher/url_launcher.dart';
 
 import '../services/tienda_service.dart';
 import 'confirmacion_pedido_screen.dart';
@@ -23,6 +23,7 @@ class _CarritoScreenState extends State<CarritoScreen> {
   List<dynamic> items = [];
   bool cargando = true;
   String nombreSucursal = "Cargando...";
+  String _clienteId = "0"; // <-- Variable para guardar el ID único del usuario
 
   bool permitePedidos = true;
   double minCompra = 0;
@@ -48,16 +49,24 @@ class _CarritoScreenState extends State<CarritoScreen> {
   @override
   void initState() {
     super.initState();
-    _obtenerCarrito();
+    _inicializarCarrito();
   }
 
   // --- LÓGICA DE DATOS Y SERVIDOR ---
+
+  // Obtenemos el ID del cliente antes de cargar su carrito
+  Future<void> _inicializarCarrito() async {
+    final prefs = await SharedPreferences.getInstance();
+    _clienteId = prefs.getString('cliente_id') ?? "0";
+    _obtenerCarrito();
+  }
 
   Future<void> _obtenerCarrito() async {
     setState(() => cargando = true);
     try {
       final res = await http.get(
-        Uri.parse('${widget.baseUrl}/api/carrito?ip_add=APP_USER'),
+        // Usamos el ID del cliente en lugar de 'APP_USER'
+        Uri.parse('${widget.baseUrl}/api/carrito?ip_add=$_clienteId'),
       );
       if (res.statusCode == 200) {
         if (!mounted) return;
@@ -95,7 +104,7 @@ class _CarritoScreenState extends State<CarritoScreen> {
           'p_id': item['p_id'],
           'qty': nuevaCantidad,
           'p_price': item['p_price'].toString(),
-          'ip_add': 'APP_USER',
+          'ip_add': _clienteId, // ID único del cliente
           'num_suc': item['num_suc'],
           'is_increment': false,
         }),
@@ -110,7 +119,10 @@ class _CarritoScreenState extends State<CarritoScreen> {
     final res = await http.post(
       Uri.parse('${widget.baseUrl}/api/carrito/eliminar'),
       headers: {'Content-Type': 'application/json'},
-      body: json.encode({'p_id': pId, 'ip_add': 'APP_USER'}),
+      body: json.encode({
+        'p_id': pId,
+        'ip_add': _clienteId,
+      }), // ID único del cliente
     );
     if (res.statusCode == 200) {
       setState(() => erroresStock.remove(pId));
@@ -141,7 +153,7 @@ class _CarritoScreenState extends State<CarritoScreen> {
         MaterialPageRoute(
           builder: (context) => LoginScreen(baseUrl: widget.baseUrl),
         ),
-      ).then((_) => _obtenerCarrito());
+      ).then((_) => _inicializarCarrito());
       return;
     }
 
@@ -172,9 +184,7 @@ class _CarritoScreenState extends State<CarritoScreen> {
               baseUrl: widget.baseUrl,
               items: items,
               total: _calcularTotal(),
-              // --- AQUÍ CONECTAMOS CON LA FUNCIÓN REAL ---
               onConfirmar: () {
-                // NO cerramos con pop. Llamamos directo a la función.
                 _finalizarPedido();
               },
             ),
@@ -207,7 +217,6 @@ class _CarritoScreenState extends State<CarritoScreen> {
     }
   }
 
-  // --- AQUÍ ESTÁ LA LÓGICA QUE FALTABA ---
   Future<void> _finalizarPedido() async {
     debugPrint("🚀 INICIANDO PROCESO DE PEDIDO...");
 
@@ -219,10 +228,9 @@ class _CarritoScreenState extends State<CarritoScreen> {
 
     final prefs = await SharedPreferences.getInstance();
 
-    String cId = prefs.get('cliente_id')?.toString() ?? "0";
-    String sId = prefs.get('saved_sucursal_id')?.toString() ?? "1";
+    String cId = prefs.getString('cliente_id') ?? "0";
+    String sId = prefs.getString('saved_sucursal_id') ?? "1";
 
-    // Convertimos a números limpios para la base de datos
     int clienteId = double.tryParse(cId)?.toInt() ?? 0;
     int sucursalId = double.tryParse(sId)?.toInt() ?? 1;
     double total = _calcularTotal();
@@ -232,7 +240,6 @@ class _CarritoScreenState extends State<CarritoScreen> {
     );
 
     try {
-      // Preparamos los items
       final List<Map<String, dynamic>> itemsParaServer = items.map((item) {
         return {
           "p_id": item['p_id'],
@@ -249,7 +256,6 @@ class _CarritoScreenState extends State<CarritoScreen> {
         "items": itemsParaServer,
       });
 
-      // Enviamos con timeout de 10 segundos
       final response = await http
           .post(
             Uri.parse('${widget.baseUrl}/api/pedidos/nuevo'),
@@ -260,7 +266,6 @@ class _CarritoScreenState extends State<CarritoScreen> {
 
       debugPrint("📨 Respuesta Servidor: ${response.body}");
 
-      // Cerramos el "Cargando"
       if (mounted) Navigator.pop(context);
 
       if (response.statusCode == 200) {
@@ -269,23 +274,18 @@ class _CarritoScreenState extends State<CarritoScreen> {
           final String folio = data['id_pedido'].toString();
           final String whatsapp = data['whatsapp']?.toString() ?? "";
 
-          // --- EL ARREGLO FANTASMA ESTÁ AQUÍ ---
-          // 1. Limpiamos el carrito REAL en la Base de Datos (Servidor)
           try {
             await TiendaService.vaciarCarrito(widget.baseUrl);
           } catch (e) {
             debugPrint("Error silencioso al vaciar DB: $e");
           }
 
-          // 2. Limpiamos la Pantalla (Local)
           setState(() {
             items.clear();
             erroresStock.clear();
           });
 
-          // 3. Disparamos la alerta y el WhatsApp
           if (mounted) _mostrarExitoYWhatsApp(folio, whatsapp);
-          // ------------------------------------
         } else {
           _mostrarError("Servidor rechazó: ${data['message']}");
         }
@@ -294,7 +294,7 @@ class _CarritoScreenState extends State<CarritoScreen> {
       }
     } catch (e) {
       debugPrint("❌ ERROR CRÍTICO: $e");
-      if (mounted) Navigator.pop(context); // Cierra cargando
+      if (mounted) Navigator.pop(context);
       _mostrarError("Error: $e");
     }
   }
@@ -326,12 +326,8 @@ class _CarritoScreenState extends State<CarritoScreen> {
               ),
             ),
             onPressed: () {
-              // Cerramos el diálogo de éxito
               Navigator.pop(ctx);
-              // Cerramos la pantalla de Confirmación (volvemos al Carrito vacío)
               Navigator.pop(context);
-
-              // Abrimos WhatsApp
               _abrirWhatsApp(telefono, folio);
             },
             child: const Text(
@@ -467,7 +463,7 @@ class _CarritoScreenState extends State<CarritoScreen> {
           'p_id': item['p_id'],
           'qty': nuevaCantidad,
           'p_price': nuevoPrecio.toString(),
-          'ip_add': 'APP_USER',
+          'ip_add': _clienteId, // ID único del cliente
           'num_suc': item['num_suc'],
           'is_increment': false,
         }),
@@ -530,9 +526,8 @@ class _CarritoScreenState extends State<CarritoScreen> {
       context,
       MaterialPageRoute(
         builder: (context) => DetalleProductoScreen(
-          productos: [item], // <-- Lo envolvemos en una lista (corchetes)
-          initialIndex:
-              0, // <-- Le decimos que muestre el elemento 0 (el único que hay)
+          productos: [item],
+          initialIndex: 0,
           baseUrl: widget.baseUrl,
           onAgregarTap: (itemParaAgregar) {
             int currentQty = (int.tryParse(item['qty'].toString()) ?? 1);
@@ -709,7 +704,11 @@ class _TarjetaProducto extends StatelessWidget {
 
     // --- NUEVA LÓGICA DE IMAGEN (GOOGLE DRIVE) ---
     String driveId = (item['drive_id'] ?? item['DriveID'])?.toString() ?? '';
-    String imageUrl = TiendaService.getImagenUrl(driveId);
+    String imageUrl = TiendaService.getImagenUrl(
+      driveId,
+      null,
+      baseUrl,
+    ); // <--- Corregido al método nuevo
 
     return Opacity(
       opacity: esAgotado ? 0.6 : 1.0,
@@ -735,8 +734,7 @@ class _TarjetaProducto extends StatelessWidget {
             children: [
               IgnorePointer(
                 ignoring: esAgotado,
-                child: // --- DENTRO DE _TarjetaProducto -> build -> Row ---
-                GestureDetector(
+                child: GestureDetector(
                   onTap: () => onShowFicha(item),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(8),
@@ -744,7 +742,7 @@ class _TarjetaProducto extends StatelessWidget {
                       tag: 'product_image_${item['p_id'] ?? item['Clave']}',
                       child: imageUrl.isNotEmpty
                           ? Image.network(
-                              imageUrl, // <--- CAMBIO CLAVE: Usar la variable con el link de Drive
+                              imageUrl,
                               width: 75,
                               height: 75,
                               fit: BoxFit.contain,

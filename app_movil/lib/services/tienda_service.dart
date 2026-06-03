@@ -1,7 +1,8 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:flutter/material.dart'; // <--- Agrega esto al principio
+import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // <-- Agregado para leer el ID
 
 class TiendaService {
   // 1. Obtener Categorías
@@ -20,16 +21,12 @@ class TiendaService {
     required int idSuc,
     required int seed,
   }) async {
-    // Construimos la URL base
     String url =
         '$baseUrl/api/tienda/buscar?page=$page&idSuc=$idSuc&seed=$seed';
 
-    // Solo añadimos 'q' si hay texto real
     if (query.trim().isNotEmpty) {
       url += "&q=${Uri.encodeComponent(query.trim())}";
     }
-
-    // Solo añadimos 'tipo' si hay categoría y no es TODOS
     if (categoria.isNotEmpty && categoria != "TODOS") {
       url += "&tipo=${Uri.encodeComponent(categoria.trim())}";
     }
@@ -43,29 +40,27 @@ class TiendaService {
   static Future<List<dynamic>> fetchSucursales(String baseUrl) async {
     try {
       final url = Uri.parse('$baseUrl/api/sucursales?soloApp=true');
-      debugPrint("--- Intentando conectar a: $url ---");
-
       final res = await http.get(url).timeout(const Duration(seconds: 5));
 
       if (res.statusCode == 200) {
         return json.decode(res.body);
       } else {
-        // Esto nos dirá si el servidor respondió con un error (404, 500, etc)
         throw Exception("Servidor respondió con código: ${res.statusCode}");
       }
     } catch (e) {
-      // Esto nos dirá si hubo un error de red (Connection refused, timeout, etc)
-      debugPrint("Error de red en fetchSucursales: $e");
       throw Exception(
-        "Error de conexión: Verifica que tu IP sea correcta y el ProLiant esté encendido.",
+        "Error de conexión: Verifica que tu IP sea correcta y el servidor esté encendido.",
       );
     }
   }
 
   // 4. Contador del Carrito
   static Future<int> getCarritoCount(String baseUrl) async {
+    final prefs = await SharedPreferences.getInstance();
+    final String clienteId = prefs.getString('cliente_id') ?? '0';
+
     final res = await http.get(
-      Uri.parse('$baseUrl/api/carrito/contar?ip_add=APP_USER'),
+      Uri.parse('$baseUrl/api/carrito/contar?ip_add=$clienteId'),
     );
     if (res.statusCode == 200) {
       final data = json.decode(res.body);
@@ -82,6 +77,9 @@ class TiendaService {
     required double price,
     required int idSuc,
   }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final String clienteId = prefs.getString('cliente_id') ?? '0';
+
     return await http.post(
       Uri.parse('$baseUrl/api/agregar_carrito'),
       headers: {'Content-Type': 'application/json'},
@@ -89,7 +87,7 @@ class TiendaService {
         'p_id': pId,
         'qty': qty,
         'p_price': price.toString(),
-        'ip_add': 'APP_USER',
+        'ip_add': clienteId,
         'num_suc': idSuc,
         'is_increment': true,
       }),
@@ -98,24 +96,26 @@ class TiendaService {
 
   // 6. Vaciar Carrito (POST)
   static Future<void> vaciarCarrito(String baseUrl) async {
+    final prefs = await SharedPreferences.getInstance();
+    final String clienteId = prefs.getString('cliente_id') ?? '0';
+
     await http.post(
       Uri.parse('$baseUrl/api/carrito/vaciar'),
-      body: json.encode({'ip_add': 'APP_USER'}),
+      body: json.encode({'ip_add': clienteId}),
       headers: {'Content-Type': 'application/json'},
     );
   }
 
-  // 7. OBTENER MENSAJE DINÁMICO (Para la confirmación final)
+  // 7. OBTENER MENSAJE DINÁMICO
   static Future<Map<String, dynamic>> fetchMensaje(
     String baseUrl,
     String slug,
   ) async {
     try {
       final res = await http.get(Uri.parse('$baseUrl/api/mensajes/$slug'));
-      debugPrint("Respuesta Mensaje (${res.statusCode}): ${res.body}");
       if (res.statusCode == 200) return json.decode(res.body);
     } catch (e) {
-      print("Error al traer mensaje: $e");
+      debugPrint("Error al traer mensaje: $e");
     }
     return {};
   }
@@ -134,19 +134,25 @@ class TiendaService {
     return json.decode(res.body);
   }
 
-  // 9. Nuevo método para formatear la URL de Google Drive
-  // En lib/services/tienda_service.dart
-  static String getImagenUrl(String? driveId) {
-    // Si es nulo, vacío o literalmente el texto "null"
-    if (driveId == null || driveId.isEmpty || driveId == 'null') {
-      return "";
+  // 9. Formatear la URL de Google Drive o Servidor Local (CORREGIDO)
+  // Ahora fotoLocal y baseUrl son opcionales usando corchetes []
+  static String getImagenUrl(
+    String? driveId, [
+    String? fotoLocal,
+    String? baseUrl,
+  ]) {
+    if (driveId != null && driveId.isNotEmpty && driveId != 'null') {
+      return "https://drive.google.com/uc?id=$driveId";
+    } else if (fotoLocal != null &&
+        fotoLocal.isNotEmpty &&
+        fotoLocal != 'null' &&
+        baseUrl != null) {
+      return "$baseUrl/uploads/$fotoLocal";
     }
-    // Formato optimizado para visualización rápida en Apps
-    return "https://lh3.googleusercontent.com/d/$driveId=h1000";
+    return "";
   }
 
-  //obtener url remota
-  // El error era el espacio entre 'baseUrl' y 'Actual'
+  // 10. Obtener URL remota
   static Future<String?> obtenerUrlRemota(String baseUrlActual) async {
     try {
       final res = await http
@@ -163,7 +169,7 @@ class TiendaService {
     return null;
   }
 
-  //consultar las redes sociales
+  // 11. Consultar las redes sociales
   static Future<List<dynamic>> fetchRedesSociales(String baseUrl) async {
     try {
       final response = await http.get(Uri.parse('$baseUrl/api/social-media'));
@@ -180,38 +186,42 @@ class TiendaService {
     }
   }
 
-  // Método centralizado para soporte vía WhatsApp
+  // 12. Método centralizado para soporte vía WhatsApp dinámico
   static Future<void> contactarSoporteWhatsApp(
     String baseUrl, {
     String? mensajePersonalizado,
   }) async {
     try {
-      // Reutilizamos la lógica de obtener el número desde la base de datos
-      final res = await http.get(Uri.parse('$baseUrl/api/config/soporte'));
+      String numeroSoporte = "529993271099";
+
+      final res = await http
+          .get(Uri.parse('$baseUrl/api/config/soporte'))
+          .timeout(const Duration(seconds: 4));
 
       if (res.statusCode == 200) {
         final data = json.decode(res.body);
-        String numeroSoporte =
-            data['telefono'] ??
-            data['TelSoporte'] ??
-            "529631320317"; // Respaldo por si acaso
-
-        // Limpiamos el número de caracteres no numéricos
-        numeroSoporte = numeroSoporte.replaceAll(RegExp(r'\D'), '');
-
-        // Aseguramos el código de país para México si no lo tiene
-        if (!numeroSoporte.startsWith('52')) numeroSoporte = '52$numeroSoporte';
-
-        String mensaje =
-            mensajePersonalizado ??
-            "Hola Factory Mayoreo, necesito ayuda con la App.";
-
-        final url =
-            "https://wa.me/$numeroSoporte?text=${Uri.encodeComponent(mensaje)}";
-
-        if (await canLaunchUrl(Uri.parse(url))) {
-          await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+        if (data['telefono'] != null &&
+            data['telefono'].toString().isNotEmpty) {
+          numeroSoporte = data['telefono'].toString();
         }
+      }
+
+      numeroSoporte = numeroSoporte.replaceAll(RegExp(r'\D'), '');
+
+      if (!numeroSoporte.startsWith('52') && numeroSoporte.length == 10) {
+        numeroSoporte = '52$numeroSoporte';
+      }
+
+      String mensaje =
+          mensajePersonalizado ??
+          "Hola Factory Mayoreo, necesito ayuda con la App.";
+      final url =
+          "https://wa.me/$numeroSoporte?text=${Uri.encodeComponent(mensaje)}";
+
+      if (await canLaunchUrl(Uri.parse(url))) {
+        await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      } else {
+        debugPrint("No se pudo abrir WhatsApp.");
       }
     } catch (e) {
       debugPrint("Error al contactar soporte: $e");

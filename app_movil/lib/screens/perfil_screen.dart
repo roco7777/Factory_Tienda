@@ -3,7 +3,9 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
+
+// --- IMPORTANTE: Importamos el servicio centralizado ---
+import '../services/tienda_service.dart';
 
 class UpperCaseTextFormatter extends TextInputFormatter {
   @override
@@ -31,7 +33,6 @@ class _PerfilScreenState extends State<PerfilScreen> {
   bool _cargando = true;
   bool _guardando = false;
   String _clienteId = "";
-  String _telSoporteDinamico = "529631320317"; // CORREGIDO
 
   // Controladores
   final _telController = TextEditingController();
@@ -85,8 +86,8 @@ class _PerfilScreenState extends State<PerfilScreen> {
                 .toString();
             _ciudadController.text = (cliente['Ciudad'] ?? "").toString();
             _estadoController.text = (cliente['Estado'] ?? "").toString();
-            if (data['telefonoSoporte'] != null)
-              _telSoporteDinamico = data['telefonoSoporte'];
+            // Eliminamos la asignación estática de _telSoporteDinamico aquí porque
+            // el servicio TiendaService ahora se encarga de todo.
           });
         }
       }
@@ -168,14 +169,16 @@ class _PerfilScreenState extends State<PerfilScreen> {
     }
   }
 
+  // --- NUEVA LÓGICA DE SOPORTE USANDO EL SERVICIO ---
   Future<void> _solicitarCambioNumero() async {
     String mensaje =
-        "Hola, soy ${_nombreController.text}. Necesito actualizar mi número ${_telController.text}.";
-    final url =
-        "https://wa.me/$_telSoporteDinamico?text=${Uri.encodeComponent(mensaje)}";
-    if (await canLaunchUrl(Uri.parse(url))) {
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-    }
+        "Hola, soy ${_nombreController.text}. Necesito actualizar mi número de la App (Actual: ${_telController.text}).";
+
+    // Llamamos al servicio centralizado para que él se encargue de consultar a la base de datos y abrir WhatsApp
+    await TiendaService.contactarSoporteWhatsApp(
+      widget.baseUrl,
+      mensajePersonalizado: mensaje,
+    );
   }
 
   // Widget auxiliar para campos de contraseña con ojo
@@ -227,7 +230,8 @@ class _PerfilScreenState extends State<PerfilScreen> {
                 ),
               ),
               TextButton(
-                onPressed: _solicitarCambioNumero,
+                onPressed:
+                    _solicitarCambioNumero, // <--- Aquí se dispara el servicio
                 child: const Text("¿Cambiaste de número? Contacta a soporte"),
               ),
               const SizedBox(height: 15),
