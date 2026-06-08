@@ -82,9 +82,14 @@ class _DetalleProductoScreenState extends State<DetalleProductoScreen> {
               int preciosActivos =
                   (p1 > 0 ? 1 : 0) + (p2 > 0 ? 1 : 0) + (p3 > 0 ? 1 : 0);
 
+              // --- CORRECCIÓN 1: AGREGAMOS NULL Y WIDGET.BASEURL ---
               String driveId =
                   (item['drive_id'] ?? item['DriveID'])?.toString() ?? '';
-              String imageUrl = TiendaService.getImagenUrl(driveId);
+              String imageUrl = TiendaService.getImagenUrl(
+                driveId,
+                null,
+                widget.baseUrl,
+              );
 
               return SingleChildScrollView(
                 physics: const BouncingScrollPhysics(),
@@ -113,57 +118,50 @@ class _DetalleProductoScreenState extends State<DetalleProductoScreen> {
                             width: double.infinity,
                             height: 380,
                             color: Colors.grey[50],
+                            // --- CORRECCIÓN 2: QUITAMOS EL HERO WIDGET AQUÍ ---
                             child: imageUrl.isNotEmpty
-                                ? Hero(
-                                    tag:
-                                        'product_image_${item['Id'] ?? item['Clave']}',
-                                    child: Image.network(
-                                      imageUrl,
-                                      fit: BoxFit.contain,
-                                      loadingBuilder:
-                                          (context, child, loadingProgress) {
-                                            if (loadingProgress == null)
-                                              return child;
-                                            return Center(
-                                              child: CircularProgressIndicator(
-                                                color: Colors.red[800],
-                                                value:
-                                                    loadingProgress
-                                                            .expectedTotalBytes !=
-                                                        null
-                                                    ? loadingProgress
-                                                              .cumulativeBytesLoaded /
-                                                          loadingProgress
-                                                              .expectedTotalBytes!
-                                                    : null,
+                                ? Image.network(
+                                    imageUrl,
+                                    fit: BoxFit.contain,
+                                    loadingBuilder:
+                                        (context, child, loadingProgress) {
+                                          if (loadingProgress == null)
+                                            return child;
+                                          return Center(
+                                            child: CircularProgressIndicator(
+                                              color: Colors.red[800],
+                                              value:
+                                                  loadingProgress
+                                                          .expectedTotalBytes !=
+                                                      null
+                                                  ? loadingProgress
+                                                            .cumulativeBytesLoaded /
+                                                        loadingProgress
+                                                            .expectedTotalBytes!
+                                                  : null,
+                                            ),
+                                          );
+                                        },
+                                    errorBuilder:
+                                        (context, error, stackTrace) => Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            Icon(
+                                              Icons
+                                                  .image_not_supported_outlined,
+                                              size: 80,
+                                              color: Colors.grey[400],
+                                            ),
+                                            const SizedBox(height: 10),
+                                            Text(
+                                              "Imagen no disponible",
+                                              style: TextStyle(
+                                                color: Colors.grey[500],
                                               ),
-                                            );
-                                          },
-                                      errorBuilder:
-                                          (
-                                            context,
-                                            error,
-                                            stackTrace,
-                                          ) => Column(
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.center,
-                                            children: [
-                                              Icon(
-                                                Icons
-                                                    .image_not_supported_outlined,
-                                                size: 80,
-                                                color: Colors.grey[400],
-                                              ),
-                                              const SizedBox(height: 10),
-                                              Text(
-                                                "Imagen no disponible",
-                                                style: TextStyle(
-                                                  color: Colors.grey[500],
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                    ),
+                                            ),
+                                          ],
+                                        ),
                                   )
                                 : Center(
                                     child: Column(
@@ -335,7 +333,6 @@ class _DetalleProductoScreenState extends State<DetalleProductoScreen> {
           ),
 
           // --- FLECHA IZQUIERDA ---
-          // Solo se muestra si NO estamos en el primer producto
           if (_currentIndex > 0)
             Align(
               alignment: const Alignment(
@@ -357,7 +354,6 @@ class _DetalleProductoScreenState extends State<DetalleProductoScreen> {
             ),
 
           // --- FLECHA DERECHA ---
-          // Solo se muestra si NO estamos en el último producto
           if (_currentIndex < widget.productos.length - 1)
             Align(
               alignment: const Alignment(1.0, -0.3), // Posición sobre la imagen
@@ -379,7 +375,6 @@ class _DetalleProductoScreenState extends State<DetalleProductoScreen> {
     );
   }
 
-  // Widget reutilizable para las flechas
   Widget _buildBotonNavegacion({
     required IconData icon,
     required VoidCallback onTap,
@@ -457,13 +452,11 @@ class FullScreenImageView extends StatelessWidget {
           panEnabled: true,
           minScale: 1.0,
           maxScale: 5.0,
-          child: Hero(
-            tag: 'product_image_$tagId',
-            child: Image.network(
-              imageUrl,
-              fit: BoxFit.contain,
-              alignment: Alignment.center,
-            ),
+          // --- CORRECCIÓN 3: QUITAMOS EL HERO WIDGET AQUÍ TAMBIÉN ---
+          child: Image.network(
+            imageUrl,
+            fit: BoxFit.contain,
+            alignment: Alignment.center,
           ),
         ),
       ),

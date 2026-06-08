@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../core/constants.dart';
 import '../services/tienda_service.dart'; // Importante para la URL de Drive
 
 class ProductCard extends StatelessWidget {
@@ -27,9 +26,10 @@ class ProductCard extends StatelessWidget {
 
     int preciosActivos = (p1 > 0 ? 1 : 0) + (p2 > 0 ? 1 : 0) + (p3 > 0 ? 1 : 0);
 
-    // --- NUEVA LÓGICA: OBTENER URL DE DRIVE ---
+    // --- CORRECCIÓN 1: FIRMA COMPLETA ---
+    // Ahora le pasamos null al fotoLocal y la baseUrl tal como lo hace el carrito
     String driveId = (item['drive_id'] ?? item['DriveID'])?.toString() ?? '';
-    String imageUrl = TiendaService.getImagenUrl(driveId);
+    String imageUrl = TiendaService.getImagenUrl(driveId, null, baseUrl);
 
     return Card(
       elevation: 4,
@@ -43,45 +43,41 @@ class ProductCard extends StatelessWidget {
                 borderRadius: const BorderRadius.vertical(
                   top: Radius.circular(8),
                 ),
-                child: Hero(
-                  // Agregamos Hero aquí también para que la animación hacia el detalle sea fluida
-                  tag: 'product_image_${item['Id'] ?? item['Clave']}',
-                  child: imageUrl.isNotEmpty
-                      ? Image.network(
-                          imageUrl,
-                          fit: BoxFit
-                              .contain, // Cambiado a contain para no cortar productos
-                          width: double.infinity,
-                          // Manejo de errores para evitar la X roja fea
-                          errorBuilder: (context, error, stackTrace) =>
-                              const Icon(
-                                Icons.image_not_supported_outlined,
-                                size: 40,
-                                color: Colors.grey,
-                              ),
-                          // Placeholder mientras descarga de Drive
-                          loadingBuilder: (context, child, loadingProgress) {
-                            if (loadingProgress == null) return child;
-                            return const Center(
-                              child: SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              ),
-                            );
-                          },
-                        )
-                      : Container(
-                          color: Colors.grey[100],
-                          child: const Icon(
-                            Icons.image_outlined,
-                            size: 40,
-                            color: Colors.grey,
-                          ),
+                // --- CORRECCIÓN 2: ELIMINACIÓN DEL WIDGET HERO ---
+                // Eliminamos el Hero para evitar el bloqueo de renderizado en la Web
+                child: imageUrl.isNotEmpty
+                    ? Image.network(
+                        imageUrl,
+                        fit: BoxFit
+                            .contain, // Cambiado a contain para no cortar productos
+                        width: double.infinity,
+                        // Manejo de errores para evitar la X roja fea
+                        errorBuilder: (context, error, stackTrace) =>
+                            const Icon(
+                              Icons.image_not_supported_outlined,
+                              size: 40,
+                              color: Colors.grey,
+                            ),
+                        // Placeholder mientras descarga de Drive
+                        loadingBuilder: (context, child, loadingProgress) {
+                          if (loadingProgress == null) return child;
+                          return const Center(
+                            child: SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          );
+                        },
+                      )
+                    : Container(
+                        color: Colors.grey[100],
+                        child: const Icon(
+                          Icons.image_outlined,
+                          size: 40,
+                          color: Colors.grey,
                         ),
-                ),
+                      ),
               ),
             ),
           ),

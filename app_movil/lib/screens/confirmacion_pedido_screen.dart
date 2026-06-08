@@ -55,8 +55,12 @@ class _ConfirmacionPedidoScreenState extends State<ConfirmacionPedidoScreen> {
       return;
     }
 
-    // 2. Usamos nuestra función maestra de TiendaService
-    final String urlFoto = TiendaService.getImagenUrl(driveId);
+    // --- CORRECCIÓN 1: PASAMOS LA BASEURL AL DIÁLOGO ---
+    final String urlFoto = TiendaService.getImagenUrl(
+      driveId,
+      null,
+      widget.baseUrl,
+    );
 
     showDialog(
       context: context,
@@ -252,8 +256,13 @@ class _ConfirmacionPedidoScreenState extends State<ConfirmacionPedidoScreen> {
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(8),
                       child: driveId.isNotEmpty && driveId != 'null'
+                          // --- CORRECCIÓN 2: PASAMOS LA BASEURL A LA MINIATURA ---
                           ? Image.network(
-                              TiendaService.getImagenUrl(driveId),
+                              TiendaService.getImagenUrl(
+                                driveId,
+                                null,
+                                widget.baseUrl,
+                              ),
                               fit: BoxFit.cover,
                               errorBuilder: (ctx, err, stack) => const Icon(
                                 Icons.broken_image,

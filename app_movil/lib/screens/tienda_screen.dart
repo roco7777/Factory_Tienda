@@ -60,14 +60,9 @@ class _TiendaScreenState extends State<TiendaScreen> {
   @override
   void initState() {
     super.initState();
-    _cargarCache();
 
-    if (productos.isEmpty) {
-      _cargarAvisoImportante();
-      _cargarSesion();
-      _cargarSucursales();
-      _actualizarContadorCarrito();
-    }
+    // Inicialización secuencial ordenada
+    _inicializarTodo();
 
     _scrollController.addListener(() {
       if (_scrollController.position.pixels >=
@@ -77,6 +72,32 @@ class _TiendaScreenState extends State<TiendaScreen> {
         }
       }
     });
+  }
+
+  Future<void> _inicializarTodo() async {
+    _cargarSesion();
+    _cargarAvisoImportante();
+    await _cargarSucursales();
+
+    // 1. CARGAMOS LAS CATEGORÍAS SIEMPRE (El caché no las guarda)
+    try {
+      if (categorias.isEmpty) {
+        categorias = await TiendaService.fetchCategorias(widget.baseUrl);
+        if (mounted) setState(() {});
+      }
+    } catch (e) {
+      debugPrint("Error al cargar categorías: $e");
+    }
+
+    // 2. Intentamos cargar el caché de productos
+    bool tieneCache = await _cargarCache();
+
+    // 3. Si no hay caché, vamos al servidor por los productos
+    if (!tieneCache) {
+      await _cargarDatosDelServidor();
+    }
+
+    _actualizarContadorCarrito();
   }
 
   @override
@@ -136,7 +157,6 @@ class _TiendaScreenState extends State<TiendaScreen> {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() {
-      // Como ya no hay invitados, el fallback es "Cliente"
       String nombreCompleto = prefs.getString('cliente_nombre') ?? "Cliente";
       nombreCliente = nombreCompleto.split(' ')[0];
     });
@@ -151,21 +171,19 @@ class _TiendaScreenState extends State<TiendaScreen> {
     }
   }
 
-  Future<void> _cargarDatosIniciales() async {
-    _cargarAvisoImportante();
-
+  // Este método procesa la descarga limpia del servidor (Invocado por Pull-to-Refresh o falta de caché)
+  Future<void> _cargarDatosDelServidor() async {
     TiendaService.fetchRedesSociales(widget.baseUrl).then((redes) {
       if (mounted) setState(() => redesSociales = redes);
     });
 
     if (!mounted) return;
-
     if (productos.isEmpty) setState(() => cargando = true);
 
     try {
-      if (categorias.isEmpty) {
-        categorias = await TiendaService.fetchCategorias(widget.baseUrl);
-      }
+      //   if (categorias.isEmpty) {
+      //     categorias = await TiendaService.fetchCategorias(widget.baseUrl);
+      //   }
 
       String busqueda = categoriaSeleccionada == "TODOS"
           ? ""
@@ -181,9 +199,8 @@ class _TiendaScreenState extends State<TiendaScreen> {
 
       if (mounted) {
         setState(() {
-          List<dynamic> copiaData = List.from(data);
-          copiaData.shuffle();
-          productos = copiaData;
+          // Eliminamos el shuffle() para mantener consistencia absoluta
+          productos = List.from(data);
           _paginaActual = 0;
           _hayMasProductos = data.length >= 10;
           cargando = false;
@@ -191,7 +208,7 @@ class _TiendaScreenState extends State<TiendaScreen> {
         _guardarCache(data);
       }
 
-      for (var prod in data) {
+      /*for (var prod in data) {
         String driveId =
             (prod['drive_id'] ?? prod['DriveID'])?.toString() ?? '';
         if (driveId.isNotEmpty && mounted) {
@@ -200,7 +217,7 @@ class _TiendaScreenState extends State<TiendaScreen> {
             context,
           );
         }
-      }
+      }*/
     } catch (e) {
       debugPrint("Error cargando datos: $e");
       if (mounted) {
@@ -237,7 +254,6 @@ class _TiendaScreenState extends State<TiendaScreen> {
             prefs.setString('saved_sucursal_nombre', nombreSucursal);
           }
         });
-        _cargarDatosIniciales();
       }
     } catch (e) {
       if (mounted) {
@@ -245,7 +261,6 @@ class _TiendaScreenState extends State<TiendaScreen> {
           sucursalSeleccionada = 2;
           nombreSucursal = "TUXTLA";
         });
-        _cargarDatosIniciales();
       }
     }
   }
@@ -276,13 +291,12 @@ class _TiendaScreenState extends State<TiendaScreen> {
   }
 
   void _mostrarFichaProducto(int index) {
-    // <-- Ahora recibe el index (la posición)
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => DetalleProductoScreen(
-          productos: productos, // <-- Le pasamos toda la lista de la tienda
-          initialIndex: index, // <-- Le decimos en qué producto empezar
+          productos: productos,
+          initialIndex: index,
           baseUrl: widget.baseUrl,
           onAgregarTap: (prod) => _mostrarSelectorCantidad(prod),
         ),
@@ -451,7 +465,8 @@ class _TiendaScreenState extends State<TiendaScreen> {
         productos = [];
         _paginaActual = 0;
       });
-      _cargarDatosIniciales();
+      // El cambio de sucursal sí requiere actualización forzada inmediata
+      _cargarDatosDelServidor();
     }
   }
 
@@ -530,10 +545,11 @@ class _TiendaScreenState extends State<TiendaScreen> {
               final prefs = await SharedPreferences.getInstance();
               await prefs.remove('cliente_id');
               await prefs.remove('cliente_nombre');
+              await prefs.remove(
+                'cache_productos_v2',
+              ); // Limpieza del nuevo alias de clave
 
               if (mounted) {
-                // Aquí cerramos la sesión y mandamos directo al LoginScreen
-                // pushAndRemoveUntil destruye el historial para no poder regresar atrás
                 Navigator.pushAndRemoveUntil(
                   context,
                   MaterialPageRoute(
@@ -574,7 +590,6 @@ class _TiendaScreenState extends State<TiendaScreen> {
           title: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 1. TÍTULO LIMPIO (Sin el saludo para evitar el overflow)
               const Text(
                 "Factory Mayoreo",
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 19),
@@ -582,7 +597,6 @@ class _TiendaScreenState extends State<TiendaScreen> {
 
               const SizedBox(height: 6),
 
-              // 2. BADGE DE ALMACÉN INTERACTIVO
               GestureDetector(
                 onTap: _mostrarModalSucursales,
                 child: Container(
@@ -641,37 +655,49 @@ class _TiendaScreenState extends State<TiendaScreen> {
               Expanded(
                 child: cargando
                     ? const Center(child: CircularProgressIndicator())
-                    : (productos.isEmpty
-                          ? const Center(
-                              child: Text("Sin stock en este almacén"),
-                            )
-                          : GridView.builder(
-                              controller: _scrollController,
-                              padding: const EdgeInsets.only(
-                                left: 8,
-                                right: 8,
-                                top: 8,
-                                bottom: 20,
-                              ),
-                              gridDelegate:
-                                  const SliverGridDelegateWithFixedCrossAxisCount(
-                                    crossAxisCount: 2,
-                                    childAspectRatio: 0.55,
-                                    crossAxisSpacing: 8,
-                                    mainAxisSpacing: 8,
+                    // Integramos el widget RefreshIndicator alrededor del renderizado principal
+                    : RefreshIndicator(
+                        color: rojoFactory,
+                        onRefresh: _cargarDatosDelServidor,
+                        child: productos.isEmpty
+                            ? Stack(
+                                children: [
+                                  ListView(), // Elemento vacío obligatorio para dar soporte al gesto táctil vertical
+                                  const Center(
+                                    child: Text("Sin stock en este almacén"),
                                   ),
-                              itemCount: productos.length,
-                              itemBuilder: (context, index) {
-                                final item = productos[index];
-                                return ProductCard(
-                                  item: item,
-                                  baseUrl: widget.baseUrl,
-                                  onTap: () => _mostrarFichaProducto(index),
-                                  onAgregar: () =>
-                                      _mostrarSelectorCantidad(item),
-                                );
-                              },
-                            )),
+                                ],
+                              )
+                            : GridView.builder(
+                                controller: _scrollController,
+                                padding: const EdgeInsets.only(
+                                  left: 8,
+                                  right: 8,
+                                  top: 8,
+                                  bottom: 20,
+                                ),
+                                physics:
+                                    const AlwaysScrollableScrollPhysics(), // Habilita el rebote de scroll continuo
+                                gridDelegate:
+                                    const SliverGridDelegateWithFixedCrossAxisCount(
+                                      crossAxisCount: 2,
+                                      childAspectRatio: 0.55,
+                                      crossAxisSpacing: 8,
+                                      mainAxisSpacing: 8,
+                                    ),
+                                itemCount: productos.length,
+                                itemBuilder: (context, index) {
+                                  final item = productos[index];
+                                  return ProductCard(
+                                    item: item,
+                                    baseUrl: widget.baseUrl,
+                                    onTap: () => _mostrarFichaProducto(index),
+                                    onAgregar: () =>
+                                        _mostrarSelectorCantidad(item),
+                                  );
+                                },
+                              ),
+                      ),
               ),
             ],
           ),
@@ -849,7 +875,6 @@ class _TiendaScreenState extends State<TiendaScreen> {
     );
   }
 
-  // --- BOTÓN DE SALIDA LIMPIO ---
   Widget _buildBotonLoginOut() {
     return IconButton(
       icon: const Icon(Icons.exit_to_app, size: 26),
@@ -859,7 +884,6 @@ class _TiendaScreenState extends State<TiendaScreen> {
     );
   }
 
-  // --- DRAWER LIMPIO (Sin Invitado) ---
   Widget _buildDrawer() {
     return Drawer(
       child: Column(
@@ -911,30 +935,28 @@ class _TiendaScreenState extends State<TiendaScreen> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: redesSociales.map((red) {
-                  String nombre = red['Nombre'].toString().toLowerCase();
+                  String name = red['Nombre'].toString().toLowerCase();
                   String url = red['url'].toString();
 
-                  // 1. Creamos el Widget completo por defecto (para enlaces genéricos)
                   Widget iconoRedSocial = const FaIcon(
                     FontAwesomeIcons.link,
                     color: Colors.grey,
                     size: 30,
                   );
 
-                  // 2. Reemplazamos el Widget completo si coincide con la red
-                  if (nombre.contains('facebook')) {
+                  if (name.contains('facebook')) {
                     iconoRedSocial = const FaIcon(
                       FontAwesomeIcons.facebook,
                       color: Color(0xFF1877F2),
                       size: 30,
                     );
-                  } else if (nombre.contains('instagram')) {
+                  } else if (name.contains('instagram')) {
                     iconoRedSocial = const FaIcon(
                       FontAwesomeIcons.instagram,
                       color: Color(0xFFE4405F),
                       size: 30,
                     );
-                  } else if (nombre.contains('tiktok')) {
+                  } else if (name.contains('tiktok')) {
                     iconoRedSocial = const FaIcon(
                       FontAwesomeIcons.tiktok,
                       color: Colors.black,
@@ -945,15 +967,13 @@ class _TiendaScreenState extends State<TiendaScreen> {
                   return Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12.0),
                     child: IconButton(
-                      icon:
-                          iconoRedSocial, // <-- Pasamos el widget directamente
+                      icon: iconoRedSocial,
                       onPressed: () => _abrirRedSocial(url),
                     ),
                   );
                 }).toList(),
               ),
             ),
-          const Spacer(),
           const Spacer(),
           ListTile(
             leading: const Icon(Icons.logout, color: Colors.red),
@@ -972,21 +992,23 @@ class _TiendaScreenState extends State<TiendaScreen> {
     );
   }
 
-  // --- MÉTODOS DE CACHÉ ---
+  // --- MÉTODOS DE CACHÉ (ACTUALIZADO A V2) ---
   Future<void> _guardarCache(List<dynamic> data) async {
     final prefs = await SharedPreferences.getInstance();
     String jsonString = jsonEncode(data);
-    await prefs.setString('cache_productos', jsonString);
+    await prefs.setString('cache_productos_v2', jsonString);
   }
 
-  Future<void> _cargarCache() async {
+  Future<bool> _cargarCache() async {
     final prefs = await SharedPreferences.getInstance();
-    String? jsonString = prefs.getString('cache_productos');
+    String? jsonString = prefs.getString('cache_productos_v2');
     if (jsonString != null && mounted) {
       setState(() {
         productos = jsonDecode(jsonString);
         cargando = false;
       });
+      return true;
     }
+    return false;
   }
 }

@@ -134,14 +134,18 @@ class TiendaService {
     return json.decode(res.body);
   }
 
-  // 9. Formatear la URL de Google Drive o Servidor Local (CORREGIDO)
-  // Ahora fotoLocal y baseUrl son opcionales usando corchetes []
+  // 9. Formatear la URL de Google Drive o Servidor Local (CORREGIDO PARA PROXY)
   static String getImagenUrl(
     String? driveId, [
     String? fotoLocal,
     String? baseUrl,
   ]) {
     if (driveId != null && driveId.isNotEmpty && driveId != 'null') {
+      // SI HAY BASEURL: Usamos tu servidor Node.js ultra-rápido para evitar los bloqueos CORS
+      if (baseUrl != null && baseUrl.isNotEmpty) {
+        return "$baseUrl/api/imagen/drive/$driveId";
+      }
+      // Fallback directo por si acaso
       return "https://drive.google.com/uc?id=$driveId";
     } else if (fotoLocal != null &&
         fotoLocal.isNotEmpty &&
